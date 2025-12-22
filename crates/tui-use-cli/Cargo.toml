@@ -1,0 +1,17 @@
+[package]
+name = "tui-use-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tui-use"
+path = "src/main.rs"
+
+[dependencies]
+tui_use = { path = "../tui_use" }
+clap = { workspace = true }
+miette = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

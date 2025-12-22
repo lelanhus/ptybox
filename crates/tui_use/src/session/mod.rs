@@ -1,0 +1,252 @@
+use crate::model::PROTOCOL_VERSION;
+use crate::model::{Action, ActionType, Observation, RunId, SessionId, TerminalSize};
+use crate::policy::apply_env_policy;
+use crate::runner::RunnerError;
+use crate::terminal::Terminal;
+#[cfg(unix)]
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+pub struct Session {
+    run_id: RunId,
+    session_id: SessionId,
+    terminal: Arc<Mutex<Terminal>>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    reader: Box<dyn Read + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    started_at: Instant,
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionConfig {
+    pub command: String,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub size: TerminalSize,
+    pub run_id: RunId,
+    pub env: crate::model::policy::EnvPolicy,
+}
+
+impl Session {
+    pub fn spawn(config: SessionConfig) -> Result<Self, RunnerError> {
+        let system = native_pty_system();
+        let pty_size = PtySize {
+            rows: config.size.rows,
+            cols: config.size.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = system
+            .openpty(pty_size)
+            .map_err(|err| RunnerError::io("E_IO", "failed to open pty", err))?;
+
+        let mut cmd = CommandBuilder::new(&config.command);
+        cmd.args(&config.args);
+        if let Some(cwd) = &config.cwd {
+            cmd.cwd(cwd);
+        }
+        apply_env_policy(&config.env, &mut cmd)?;
+
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|err| RunnerError::io("E_IO", "failed to spawn command", err))?;
+
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|err| RunnerError::io("E_IO", "failed to clone pty reader", err))?;
+
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|err| RunnerError::io("E_IO", "failed to take pty writer", err))?;
+
+        #[cfg(unix)]
+        {
+            if let Some(fd) = pair.master.as_raw_fd() {
+                let flags = OFlag::from_bits_truncate(
+                    fcntl(fd, FcntlArg::F_GETFL)
+                        .map_err(|err| RunnerError::io("E_IO", "failed to get fd flags", err))?,
+                );
+                let new_flags = flags | OFlag::O_NONBLOCK;
+                fcntl(fd, FcntlArg::F_SETFL(new_flags))
+                    .map_err(|err| RunnerError::io("E_IO", "failed to set nonblocking", err))?;
+            }
+        }
+
+        let terminal = Terminal::new(config.size);
+
+        Ok(Self {
+            run_id: config.run_id,
+            session_id: SessionId::new(),
+            terminal: Arc::new(Mutex::new(terminal)),
+            master: pair.master,
+            writer,
+            reader,
+            child,
+            started_at: Instant::now(),
+        })
+    }
+
+    pub fn send(&mut self, action: &Action) -> Result<(), RunnerError> {
+        match action.action_type {
+            ActionType::Key => {
+                let key = action
+                    .payload
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| RunnerError::protocol("E_PROTOCOL", "missing key payload"))?;
+                let bytes = key_to_bytes(key)?;
+                self.writer
+                    .write_all(&bytes)
+                    .map_err(|err| RunnerError::io("E_IO", "failed to write key", err))?;
+                self.writer
+                    .flush()
+                    .map_err(|err| RunnerError::io("E_IO", "failed to flush key", err))?;
+                Ok(())
+            }
+            ActionType::Text => {
+                let text = action
+                    .payload
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| RunnerError::protocol("E_PROTOCOL", "missing text payload"))?;
+                self.writer
+                    .write_all(text.as_bytes())
+                    .map_err(|err| RunnerError::io("E_IO", "failed to write text", err))?;
+                self.writer
+                    .flush()
+                    .map_err(|err| RunnerError::io("E_IO", "failed to flush text", err))?;
+                Ok(())
+            }
+            ActionType::Resize => {
+                let rows = action
+                    .payload
+                    .get("rows")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| RunnerError::protocol("E_PROTOCOL", "missing rows"))?
+                    as u16;
+                let cols = action
+                    .payload
+                    .get("cols")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| RunnerError::protocol("E_PROTOCOL", "missing cols"))?
+                    as u16;
+                self.master
+                    .resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .map_err(|err| RunnerError::io("E_IO", "failed to resize pty", err))?;
+                if let Ok(mut terminal) = self.terminal.lock() {
+                    terminal.resize(TerminalSize { rows, cols });
+                }
+                Ok(())
+            }
+            ActionType::Wait => Ok(()),
+            ActionType::Terminate => self.terminate(),
+        }
+    }
+
+    pub fn observe(&mut self, timeout: Duration) -> Result<Observation, RunnerError> {
+        let mut total = Vec::new();
+        let deadline = Instant::now() + timeout;
+        loop {
+            let mut read_buffer = vec![0u8; 4096];
+            match self.reader.read(&mut read_buffer) {
+                Ok(0) => break,
+                Ok(count) => {
+                    read_buffer.truncate(count);
+                    total.extend_from_slice(&read_buffer);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(err) => return Err(RunnerError::io("E_IO", "failed to read pty", err)),
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
+
+        let mut terminal = self
+            .terminal
+            .lock()
+            .map_err(|_| RunnerError::internal("E_INTERNAL", "terminal lock poisoned"))?;
+        terminal.process_bytes(&total);
+        let snapshot = terminal.snapshot()?;
+        let transcript_delta = if total.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&total).to_string())
+        };
+        Ok(Observation {
+            protocol_version: PROTOCOL_VERSION,
+            run_id: self.run_id,
+            session_id: self.session_id,
+            timestamp_ms: self.started_at.elapsed().as_millis() as u64,
+            screen: snapshot,
+            transcript_delta,
+            events: Vec::new(),
+        })
+    }
+
+    pub fn wait_for_exit(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<portable_pty::ExitStatus>, RunnerError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return Ok(Some(status)),
+                Ok(None) => {
+                    if Instant::now() > deadline {
+                        return Ok(None);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => {
+                    return Err(RunnerError::io("E_IO", "failed to wait for child", err));
+                }
+            }
+        }
+    }
+
+    pub fn terminate(&mut self) -> Result<(), RunnerError> {
+        self.child
+            .kill()
+            .map_err(|err| RunnerError::io("E_IO", "failed to terminate child", err))
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+}
+
+fn key_to_bytes(key: &str) -> Result<Vec<u8>, RunnerError> {
+    let bytes = match key {
+        "Enter" => vec![b'\r'],
+        "Up" => b"\x1b[A".to_vec(),
+        "Down" => b"\x1b[B".to_vec(),
+        "Right" => b"\x1b[C".to_vec(),
+        "Left" => b"\x1b[D".to_vec(),
+        "Tab" => vec![b'\t'],
+        _ => {
+            if key.len() == 1 {
+                return Ok(key.as_bytes().to_vec());
+            }
+            return Err(RunnerError::protocol("E_PROTOCOL", "unsupported key"));
+        }
+    };
+    Ok(bytes)
+}

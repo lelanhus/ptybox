@@ -1,0 +1,422 @@
+[
+  {
+    "category": "functional",
+    "description": "Spawn a target TUI under a PTY using argv exec (no shell) and return a structured RunResult with exit status.",
+    "steps": [
+      "Step 1: Run `tui-use exec --json -- <cmd> <args...>` against a small fixture program",
+      "Step 2: Verify the command runs in a PTY and produces terminal output",
+      "Step 3: Verify JSON output includes exit code, runtime, and final screen snapshot"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Send keystrokes to the PTY session and observe updated screen snapshots deterministically.",
+    "steps": [
+      "Step 1: Start `tui-use driver --stdio --json -- <cmd>` with a fixture TUI",
+      "Step 2: Send a key action (e.g., Down/Enter) via NDJSON stdin",
+      "Step 3: Verify an Observation message reflects the expected screen change"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Send text input (type/paste) to the PTY session and verify the typed text appears on screen.",
+    "steps": [
+      "Step 1: Start an interactive session with a fixture TUI that echoes input",
+      "Step 2: Send a text action with a multi-line payload",
+      "Step 3: Verify the screen snapshot contains the expected text (normalized)"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Resize the PTY and verify the terminal emulator reports updated rows/cols and reflows content.",
+    "steps": [
+      "Step 1: Start a fixture TUI that displays current terminal size",
+      "Step 2: Send a resize action changing rows/cols",
+      "Step 3: Verify the observation shows updated size and expected layout changes"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Capture canonical screen snapshots (text lines) with cursor position and alternate screen flag.",
+    "steps": [
+      "Step 1: Run a fixture program that moves the cursor and uses alt-screen",
+      "Step 2: Capture observations at key points",
+      "Step 3: Verify snapshots include cursor coordinates and alt-screen state"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Scenario runner executes actions and assertions step-by-step with timeouts and retries.",
+    "steps": [
+      "Step 1: Create a scenario file with multiple steps and assertions",
+      "Step 2: Run `tui-use run --scenario <file> --json`",
+      "Step 3: Verify the runner returns per-step results and overall pass/fail"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Assertions support screen_contains, regex_match, and cursor_at with helpful diagnostics.",
+    "steps": [
+      "Step 1: Write a scenario with at least three assertion types",
+      "Step 2: Run the scenario against a fixture TUI",
+      "Step 3: Verify failures include error code, failing assertion, and relevant screen excerpt"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Wait conditions provide 'wait until screen matches' without fixed sleeps.",
+    "steps": [
+      "Step 1: Use a fixture that updates the screen after a short delay",
+      "Step 2: Use a wait action/condition with a timeout",
+      "Step 3: Verify the step passes without using arbitrary sleep durations"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Artifacts include transcript, snapshots, effective policy, and resolved scenario in a predictable directory layout.",
+    "steps": [
+      "Step 1: Run a scenario with `--artifacts <dir>`",
+      "Step 2: Inspect the artifacts directory",
+      "Step 3: Verify required files exist and reference the correct run/session IDs"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Replay mode re-runs or replays captured artifacts to support deterministic regression checks.",
+    "steps": [
+      "Step 1: Record a run with artifacts enabled",
+      "Step 2: Invoke replay against the artifact bundle",
+      "Step 3: Verify output matches the canonical snapshots and reports differences on mismatch"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Normalization filters are opt-in, versioned, and recorded in artifacts to avoid hidden behavior.",
+    "steps": [
+      "Step 1: Run a fixture with spinner/timestamp output without filters",
+      "Step 2: Re-run with explicit normalization enabled",
+      "Step 3: Verify the artifacts record which filters were applied and why"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "CLI supports stable JSON output suitable for parsing in scripts (no human-only output required).",
+    "steps": [
+      "Step 1: Run `tui-use run --json` and `tui-use exec --json`",
+      "Step 2: Parse output with `jq` (or another JSON parser)",
+      "Step 3: Verify schemas are consistent and include protocol/version fields"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "Sandboxing is enabled by default and the tool fails if the sandbox is unavailable (no silent downgrade).",
+    "steps": [
+      "Step 1: Configure a run that requires the default sandbox backend",
+      "Step 2: Simulate sandbox unavailability (or run on a system where it is disabled)",
+      "Step 3: Verify the run fails with E_SANDBOX_UNAVAILABLE and clear guidance"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Runs inside Linux containers with PTY support using an explicit sandbox policy (no macOS-only assumptions).",
+    "steps": [
+      "Step 1: Run `tui-use exec --json --policy <policy.json> -- <cmd>` inside a Linux container with /dev/pts mounted",
+      "Step 2: Use a policy that explicitly sets `sandbox: none` and allowlists the target executable",
+      "Step 3: Verify the run succeeds and returns a structured RunResult without host sandbox errors"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "Network is disabled by default; attempts to use network fail unless explicitly allowed by policy and enforceable by sandbox.",
+    "steps": [
+      "Step 1: Run a fixture that attempts a network call under default policy",
+      "Step 2: Observe the behavior",
+      "Step 3: Verify the run is denied or fails with a policy/sandbox error and is logged"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "Filesystem access is restricted to allowlisted paths; reads/writes outside the allowlist fail fast.",
+    "steps": [
+      "Step 1: Configure policy with a narrow allowed_read/allowed_write list",
+      "Step 2: Run a fixture that attempts to read/write outside these paths",
+      "Step 3: Verify the run fails with E_POLICY_DENIED (or sandbox denial) and the path is reported"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "Exec is restricted to allowlisted executable paths; unknown executables are denied.",
+    "steps": [
+      "Step 1: Configure policy with one allowed executable",
+      "Step 2: Attempt to run a different executable",
+      "Step 3: Verify the tool denies the run with E_POLICY_DENIED and no process is spawned"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "Shell execution is disabled by default; `sh -c` style execution requires explicit opt-in.",
+    "steps": [
+      "Step 1: Attempt to run a command through a shell under default policy",
+      "Step 2: Observe the tool behavior",
+      "Step 3: Verify it fails with E_POLICY_DENIED and explains how to opt in safely"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "Resource budgets are enforced: max runtime, max output bytes, max steps.",
+    "steps": [
+      "Step 1: Run a fixture that produces unlimited output or runs indefinitely",
+      "Step 2: Set strict budgets in policy",
+      "Step 3: Verify termination occurs at the budget boundary with E_TIMEOUT or budget-specific failure"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "Artifacts directory is explicit and controlled; the tool does not write outside it unless explicitly allowed.",
+    "steps": [
+      "Step 1: Run with artifacts enabled and a chosen directory",
+      "Step 2: Monitor filesystem writes",
+      "Step 3: Verify only the artifacts directory is written (aside from OS/runtime necessities)"
+    ],
+    "passes": false
+  },
+  {
+    "category": "reliability",
+    "description": "Repeated runs of the same fixture scenario produce identical canonical snapshots within defined normalization rules.",
+    "steps": [
+      "Step 1: Run the same scenario N times on the same machine",
+      "Step 2: Compare snapshot outputs",
+      "Step 3: Verify all runs match or mismatches are explained by explicit nondeterminism settings"
+    ],
+    "passes": false
+  },
+  {
+    "category": "reliability",
+    "description": "Timeouts are deterministic and reported with precise context (which step, which wait condition).",
+    "steps": [
+      "Step 1: Create a scenario with a wait that will never succeed",
+      "Step 2: Run the scenario",
+      "Step 3: Verify the error reports the exact step and condition and returns E_TIMEOUT"
+    ],
+    "passes": false
+  },
+  {
+    "category": "reliability",
+    "description": "Terminal parsing failures do not corrupt subsequent state; they fail the run with E_TERMINAL_PARSE and artifacts are still written.",
+    "steps": [
+      "Step 1: Feed malformed/unsupported escape sequences via a fixture",
+      "Step 2: Run the fixture under artifacts-on mode",
+      "Step 3: Verify the run fails with E_TERMINAL_PARSE and preserves debugging artifacts"
+    ],
+    "passes": false
+  },
+  {
+    "category": "style",
+    "description": "CLI errors are fail-fast and loud: include stable error codes, clear messages, and actionable remediation steps.",
+    "steps": [
+      "Step 1: Trigger a policy denial and a timeout failure",
+      "Step 2: Inspect stderr and JSON output",
+      "Step 3: Verify each error includes code, message, and structured context"
+    ],
+    "passes": false
+  },
+  {
+    "category": "style",
+    "description": "CLI help text documents safe defaults and how to explicitly opt into unsafe modes.",
+    "steps": [
+      "Step 1: Run `tui-use --help` and `tui-use run --help`",
+      "Step 2: Review the output",
+      "Step 3: Verify defaults, sandbox behavior, and unsafe flags are clearly explained"
+    ],
+    "passes": false
+  },
+  {
+    "category": "documentation",
+    "description": "Spec directory is complete and consistent: plan, data model, feature list, and app spec exist and cross-reference each other.",
+    "steps": [
+      "Step 1: Open `spec/plan.md`, `spec/data-model.md`, `spec/feature-list.json`, and `spec/app_spec.txt`",
+      "Step 2: Verify each document is present and readable",
+      "Step 3: Verify references align (types, protocols, and acceptance tests match)"
+    ],
+    "passes": false
+  },
+  {
+    "category": "documentation",
+    "description": "Changelog is updated for any change to public behavior, types, or protocol.",
+    "steps": [
+      "Step 1: Make a deliberate public API or protocol change",
+      "Step 2: Update docs and code accordingly",
+      "Step 3: Verify `CHANGELOG.md` includes an entry describing the change and compatibility impact"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Scenario files can be loaded from either JSON or YAML formats.",
+    "steps": [
+      "Step 1: Create equivalent scenario files in JSON and YAML",
+      "Step 2: Run each scenario with `tui-use run --scenario <file> --json`",
+      "Step 3: Verify both runs produce equivalent step results and final status"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Scenario run config supports referencing an external policy file and writes the effective policy to artifacts.",
+    "steps": [
+      "Step 1: Create a policy file and a scenario that references it",
+      "Step 2: Run the scenario with artifacts enabled",
+      "Step 3: Verify the artifact bundle includes `policy.json` and it matches the effective policy"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "CLI includes an `--explain-policy` style command/output to show why a run is allowed or denied.",
+    "steps": [
+      "Step 1: Configure a policy that will deny a run",
+      "Step 2: Run `tui-use` with policy explanation enabled",
+      "Step 3: Verify output explains the exact denial reason and the minimum change needed to allow it"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "NDJSON interactive driver mode includes protocol versioning and rejects incompatible versions explicitly.",
+    "steps": [
+      "Step 1: Start `tui-use driver --stdio --json` and capture the first output message",
+      "Step 2: Verify it includes a `protocol_version` field",
+      "Step 3: Send a message with an incompatible protocol version and verify E_PROTOCOL_VERSION_MISMATCH"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "Environment variables passed to the child are controlled by an explicit allowlist; inheritance is disabled by default.",
+    "steps": [
+      "Step 1: Run a fixture that prints its environment under the default policy",
+      "Step 2: Verify only explicitly set/allowlisted variables are present",
+      "Step 3: Enable inheritance explicitly and verify non-allowlisted vars are still filtered"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "The configured working directory (cwd) is validated against filesystem policy and denied if outside allowlisted roots.",
+    "steps": [
+      "Step 1: Configure a policy allowlisting a narrow read/write root",
+      "Step 2: Attempt to set cwd outside that root",
+      "Step 3: Verify the run fails fast with E_POLICY_DENIED before spawning the child"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "Disabling the sandbox requires explicit acknowledgement flags to prevent accidental unsafe runs.",
+    "steps": [
+      "Step 1: Run with `--no-sandbox` (or equivalent) without an acknowledgement flag",
+      "Step 2: Observe the tool behavior",
+      "Step 3: Verify it fails with E_POLICY_DENIED (or a dedicated error) and requires explicit acknowledgement"
+    ],
+    "passes": false
+  },
+  {
+    "category": "safety",
+    "description": "Child processes are terminated as a process group to avoid leaving behind runaway subprocesses.",
+    "steps": [
+      "Step 1: Run a fixture that spawns a child subprocess which continues running",
+      "Step 2: Terminate the run or hit a budget limit",
+      "Step 3: Verify both the main process and subprocesses are terminated"
+    ],
+    "passes": false
+  },
+  {
+    "category": "reliability",
+    "description": "Artifacts are written even on failures (policy denied, timeout, assertion failed) when artifacts are enabled.",
+    "steps": [
+      "Step 1: Run a scenario that will fail (e.g., assertion failure) with artifacts enabled",
+      "Step 2: Inspect the artifacts directory",
+      "Step 3: Verify `run.json`, transcript, and relevant snapshots exist for debugging"
+    ],
+    "passes": false
+  },
+  {
+    "category": "reliability",
+    "description": "Artifact overwrite behavior is explicit: existing directories are rejected unless overwrite is enabled.",
+    "steps": [
+      "Step 1: Run once with `--artifacts <dir>` to create an artifacts directory",
+      "Step 2: Run again with the same directory and overwrite disabled",
+      "Step 3: Verify the second run fails fast before spawning the child and explains how to proceed"
+    ],
+    "passes": false
+  },
+  {
+    "category": "reliability",
+    "description": "Malformed JSON/NDJSON inputs fail with a structured protocol error and do not crash the process.",
+    "steps": [
+      "Step 1: Start `tui-use driver --stdio --json`",
+      "Step 2: Send malformed JSON via stdin",
+      "Step 3: Verify the process returns a structured protocol error (E_PROTOCOL) and exits non-zero"
+    ],
+    "passes": false
+  },
+  {
+    "category": "reliability",
+    "description": "Protocol version mismatches fail loudly with E_PROTOCOL_VERSION_MISMATCH and provide remediation guidance.",
+    "steps": [
+      "Step 1: Force a protocol version mismatch (e.g., via a test harness that sets an unsupported version)",
+      "Step 2: Run a command in JSON/NDJSON mode",
+      "Step 3: Verify the error includes the supported versions and how to upgrade/downgrade"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Terminal snapshots correctly represent Unicode and wide characters (e.g., emoji, CJK) without corrupting layout.",
+    "steps": [
+      "Step 1: Run a fixture that prints wide characters and combining marks",
+      "Step 2: Capture a screen snapshot",
+      "Step 3: Verify the snapshot preserves graphemes and expected alignment within the configured cols"
+    ],
+    "passes": false
+  },
+  {
+    "category": "style",
+    "description": "In `--json` mode, stdout contains only JSON/NDJSON while human logs go to stderr (no surprises for parsers).",
+    "steps": [
+      "Step 1: Run a command in JSON mode and capture stdout and stderr separately",
+      "Step 2: Verify stdout parses as JSON/NDJSON without extra text",
+      "Step 3: Verify diagnostics/logs are emitted on stderr"
+    ],
+    "passes": false
+  },
+  {
+    "category": "style",
+    "description": "Exit codes are stable and mapped by failure class (policy denied vs assertion failed vs infrastructure error).",
+    "steps": [
+      "Step 1: Trigger a policy denial, an assertion failure, and an internal I/O failure",
+      "Step 2: Capture the process exit codes for each case",
+      "Step 3: Verify exit codes are distinct (when appropriate) and documented"
+    ],
+    "passes": false
+  }
+]

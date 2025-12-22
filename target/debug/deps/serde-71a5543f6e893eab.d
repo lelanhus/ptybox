@@ -1,0 +1,14 @@
+/Users/lelandhusband/Developer/Projects/tui-use/target/debug/deps/libserde-71a5543f6e893eab.rmeta: /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/lelandhusband/Developer/Projects/tui-use/target/debug/build/serde-496277053e86700a/out/private.rs
+
+/Users/lelandhusband/Developer/Projects/tui-use/target/debug/deps/libserde-71a5543f6e893eab.rlib: /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/lelandhusband/Developer/Projects/tui-use/target/debug/build/serde-496277053e86700a/out/private.rs
+
+/Users/lelandhusband/Developer/Projects/tui-use/target/debug/deps/serde-71a5543f6e893eab.d: /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/lelandhusband/Developer/Projects/tui-use/target/debug/build/serde-496277053e86700a/out/private.rs
+
+/Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/lelandhusband/Developer/Projects/tui-use/target/debug/build/serde-496277053e86700a/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/lelandhusband/Developer/Projects/tui-use/target/debug/build/serde-496277053e86700a/out

@@ -1,0 +1,174 @@
+<project_specification>
+  <project_name>tui-use - Safe TUI Automation Harness for LLM Self-Testing</project_name>
+
+  <overview>
+    Build a macOS-first, security-focused harness that allows automated agents (including LLMs) to interact with
+    terminal UI (TUI) applications like a human would. The system must run the target program inside a pseudo-terminal,
+    accept human-like actions (keypresses, text entry, resize, wait, terminate), and produce deterministic observations
+    (canonical screen snapshots + transcripts) so tests can assert behavior and regressions can be replayed.
+    The tool must also function inside Linux containers used for sandboxed LLMs or agent orchestrations.
+
+    Guardrails are a core requirement: deny-by-default policies, sandboxing enabled by default, strict resource budgets,
+    and explicit opt-in for any unsafe behavior. The tool is exposed as a Rust library (typesafe programmatic API) and a
+    CLI with a stable JSON/NDJSON protocol for scripting and custom “tool” wrappers. No MCP integration is required or
+    desired.
+  </overview>
+
+  <technology_stack>
+    <language>Rust (stable)</language>
+    <packaging>Cargo workspace (library + CLI)</packaging>
+    <pty>portable-pty (or equivalent)</pty>
+    <terminal_emulation>wezterm-term (or equivalent ANSI/VT engine)</terminal_emulation>
+    <serialization>Serde (JSON + NDJSON for streaming)</serialization>
+    <cli>clap</cli>
+    <logging>tracing</logging>
+    <errors>thiserror + miette (typed errors, fail fast and loud)</errors>
+    <sandboxing>
+      <default>Seatbelt sandbox via sandbox-exec profile (macOS)</default>
+      <modes>seatbelt (default on macOS), none (explicit opt-in only)</modes>
+      <linux_container>Linux containers are a supported runtime; when no host sandbox backend is available, require explicit opt-in and record the external sandbox assumption in artifacts.</linux_container>
+    </sandboxing>
+  </technology_stack>
+
+  <prerequisites>
+    <environment_setup>
+      - macOS (v1 target); macOS 13+ recommended
+      - Linux container runtime (v1 target alongside macOS); /dev/pts mounted for PTY support
+      - Rust toolchain installed via rustup
+      - sandbox-exec available for default sandbox mode on macOS
+      - No network access required for normal operation
+    </environment_setup>
+  </prerequisites>
+
+  <core_features>
+    <session_management>
+      - Spawn a target command under a PTY using argv exec (no shell by default)
+      - Send actions: keypress, text input, resize, wait, terminate
+      - Observe canonical terminal state: screen text, cursor position, alt-screen flag, and transcript deltas
+      - Enforce hard budgets and deterministic shutdown behavior
+    </session_management>
+
+    <terminal_snapshotting>
+      - Parse ANSI/VT sequences into a canonical terminal model
+      - Produce stable, deterministic screen snapshots suitable for assertions and diffs
+      - Support optional, explicit normalization filters (recorded in artifacts)
+    </terminal_snapshotting>
+
+    <scenario_runner>
+      - Load scenario files describing run config + step list
+      - Execute steps with timeouts/retries using “wait until condition” primitives
+      - Assertions over screen snapshots and process state with structured diagnostics
+    </scenario_runner>
+
+    <guardrails>
+      - Deny-by-default Policy model (exec/fs/env/network/budgets)
+      - Sandbox enabled by default; never silently downgrade if unavailable
+      - Clear unsafe-mode escape hatch that is explicit, loud, and logged
+      - Artifacts + audit logs for every run
+      - Linux container runs require explicit external-sandbox opt-in and must record that choice
+      - Policy guidance avoids broad allowlists (e.g., `/` or home directories) and favors minimal, scoped paths
+    </guardrails>
+
+    <artifacts_and_replay>
+      - Store transcript, snapshots, effective policy, and resolved scenario in a predictable directory layout
+      - Replay runs for deterministic regression testing and debugging
+    </artifacts_and_replay>
+  </core_features>
+
+  <api_surface_summary>
+    <rust_library>
+      - Provide a programmatic API centered around Session/Run/Scenario types
+      - All public types are documented in spec/data-model.md and are versioned
+      - Errors are typed and include stable error codes
+    </rust_library>
+
+    <cli_protocol>
+      - Non-interactive JSON mode for run/exec commands (parseable by scripts/LLM tools)
+      - Optional interactive NDJSON over stdio for step-by-step driving
+    </cli_protocol>
+  </api_surface_summary>
+
+  <project_structure>
+    <architecture>
+      - Favor a vertical slice (feature-based) layout: each feature owns its types, errors, tests, and doc updates.
+      - Keep shared core primitives minimal and stable.
+    </architecture>
+
+    <workspace_layout>
+      - crates/tui_use (library)
+      - crates/tui-use-cli (CLI)
+      - spec/ (living specifications and acceptance test list)
+      - CHANGELOG.md (public change history)
+    </workspace_layout>
+  </project_structure>
+
+  <implementation_steps>
+    <step number="1">
+      <title>Spec-first bootstrap</title>
+      <tasks>
+        - Establish the Cargo workspace and vertical-slice module layout
+        - Implement core types and error codes matching spec/data-model.md
+        - Add CLI skeleton and JSON output scaffolding
+      </tasks>
+    </step>
+
+    <step number="2">
+      <title>PTY session + canonical terminal snapshots</title>
+      <tasks>
+        - Implement PTY spawn/read/write/resize/terminate with strict budgets
+        - Integrate a VT parser and produce canonical ScreenSnapshot output
+        - Add fixture TUIs and snapshot golden tests
+      </tasks>
+    </step>
+
+    <step number="3">
+      <title>Scenario runner + assertions</title>
+      <tasks>
+        - Define scenario schema and parsing (JSON/YAML)
+        - Implement step execution with wait conditions and retries
+        - Implement assertions with structured diagnostics and artifacts
+      </tasks>
+    </step>
+
+    <step number="4">
+      <title>Guardrails + sandboxing</title>
+      <tasks>
+        - Implement Policy evaluation (deny-by-default) with clear error codes
+        - Add macOS sandbox backend enabled by default (seatbelt profile)
+        - Ensure sandbox unavailability is an explicit failure unless overridden
+        - Add a Linux container-compatible sandbox strategy (external sandbox declaration or Linux backend)
+      </tasks>
+    </step>
+
+    <step number="5">
+      <title>Artifacts + replay + protocol hardening</title>
+      <tasks>
+        - Standardize artifact bundle layout and ensure it is always written when enabled
+        - Implement replay/regression checks and diff reporting
+        - Stabilize protocol versions and publish JSON schemas
+      </tasks>
+    </step>
+  </implementation_steps>
+
+  <success_criteria>
+    <functionality>
+      - A scenario can drive a fixture TUI end-to-end and assert outcomes deterministically
+      - Interactive NDJSON mode can drive a session programmatically from a script
+      - Artifacts enable reliable debugging and replay
+      - The tool runs reliably inside Linux containers with PTY support
+    </functionality>
+
+    <security>
+      - Sandbox is enabled by default and never silently downgraded
+      - Network is disabled by default; filesystem and exec are allowlist-only
+      - Any unsafe mode requires explicit opt-in and is recorded in artifacts/logs
+      - External sandbox reliance (e.g. Linux containers) must be explicit and recorded
+    </security>
+
+    <technical_quality>
+      - Typesafe APIs and stable error codes; failures are loud and actionable
+      - Determinism checks pass on repeated runs within specified constraints
+      - Vertical-slice architecture is maintained as features grow
+    </technical_quality>
+  </success_criteria>
+</project_specification>

@@ -1,0 +1,6 @@
+/Users/lelandhusband/Developer/Projects/tui-use/target/debug/deps/libunicode_width-a6f713004bae715b.rmeta: /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-width-0.2.2/src/lib.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-width-0.2.2/src/tables.rs
+
+/Users/lelandhusband/Developer/Projects/tui-use/target/debug/deps/unicode_width-a6f713004bae715b.d: /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-width-0.2.2/src/lib.rs /Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-width-0.2.2/src/tables.rs
+
+/Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-width-0.2.2/src/lib.rs:
+/Users/lelandhusband/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-width-0.2.2/src/tables.rs:
