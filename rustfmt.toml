@@ -1,0 +1,61 @@
+# Rustfmt Configuration for tui-use
+# Enforces consistent formatting across the codebase
+#
+# Reference: https://rust-lang.github.io/rustfmt/
+# Note: Some options require nightly rustfmt and are commented out
+
+# ============================================================================
+# STABLE OPTIONS
+# ============================================================================
+
+# Rust edition for parsing
+edition = "2021"
+
+# Maximum line width (default: 100)
+max_width = 100
+
+# Use spaces, not tabs
+hard_tabs = false
+
+# Number of spaces per indentation level
+tab_spaces = 4
+
+# Sort imports alphabetically
+reorder_imports = true
+
+# Use heuristics for formatting (auto-size based on content)
+use_small_heuristics = "Default"
+
+# Force explicit "C" ABI on extern blocks
+force_explicit_abi = true
+
+# ============================================================================
+# NIGHTLY-ONLY OPTIONS (uncomment with nightly rustfmt)
+# ============================================================================
+
+# How to group imports within a use statement
+# imports_granularity = "Crate"
+
+# How to group import statements
+# group_imports = "StdExternalCrate"
+
+# Don't collapse simple functions to single line
+# fn_single_line = false
+
+# Don't collapse where clauses to single line
+# where_single_line = false
+
+# Don't reformat string literals
+# format_strings = false
+
+# Normalize doc comments to /// style
+# normalize_doc_attributes = true
+
+# Wrap comments at max_width
+# wrap_comments = false
+
+# Format macro bodies
+# format_macro_matchers = true
+
+# Format macro invocations
+# format_macro_bodies = true

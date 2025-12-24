@@ -1,9 +1,18 @@
+//! TUI-Use: A security-focused harness for driving terminal UI applications.
+//!
+//! This crate provides a stable JSON/NDJSON protocol for automated agents to interact
+//! with TUI apps via keys, text, resize, and wait commands, and verify behavior via
+//! deterministic terminal screen snapshots and transcripts.
+
 #![forbid(unsafe_code)]
+// TODO: Remove this allowance once documentation is complete
+#![allow(missing_docs)]
 
 pub mod artifacts;
 pub mod assertions;
 pub mod model;
 pub mod policy;
+pub mod replay;
 pub mod runner;
 pub mod scenario;
 pub mod session;
@@ -13,7 +22,7 @@ pub use crate::model::*;
 
 pub mod run {
     use super::runner::{
-        RunnerOptions, run_exec_with_options as run_exec_impl, run_scenario as run_scenario_impl,
+        run_exec_with_options as run_exec_impl, run_scenario as run_scenario_impl, RunnerOptions,
     };
     use super::{Policy, RunResult, Scenario};
 

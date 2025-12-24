@@ -335,8 +335,7 @@ fn write_replay_diff(dir: &Path, err: &RunnerError) -> RunnerResult<()> {
     let diff = ReplayDiff {
         kind: mismatch
             .as_ref()
-            .map(|value| value.kind.clone())
-            .unwrap_or_else(|| "unknown".to_string()),
+            .map_or_else(|| "unknown".to_string(), |value| value.kind.clone()),
         index: mismatch.and_then(|value| value.index),
         code: err.code.clone(),
         message: err.message.clone(),
@@ -715,10 +714,14 @@ fn update_checksum_entry(dir: &Path, relative: &str) -> RunnerResult<()> {
 }
 
 fn fnv1a_hash(data: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
+    // FNV-1a constants (64-bit)
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0100_0000_01b3;
+
+    let mut hash: u64 = FNV_OFFSET_BASIS;
     for byte in data {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
     }
     hash
 }
@@ -760,12 +763,13 @@ fn mismatch_from_error(err: &RunnerError) -> Option<ReplayMismatch> {
     let context = err.context.as_ref()?;
     let kind = context
         .get("kind")
-        .and_then(|val| val.as_str())
+        .and_then(Value::as_str)
         .unwrap_or("unknown")
         .to_string();
+    #[allow(clippy::cast_possible_truncation)] // Index values are small
     let index = context
         .get("index")
-        .and_then(|val| val.as_u64())
+        .and_then(Value::as_u64)
         .map(|val| val as usize);
     Some(ReplayMismatch { kind, index })
 }

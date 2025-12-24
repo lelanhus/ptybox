@@ -7,6 +7,8 @@ use uuid::Uuid;
 pub struct RunId(Uuid);
 
 impl RunId {
+    /// Create a new unique run ID.
+    #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
@@ -29,6 +31,8 @@ impl fmt::Display for RunId {
 pub struct SessionId(Uuid);
 
 impl SessionId {
+    /// Create a new unique session ID.
+    #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
@@ -51,6 +55,8 @@ impl fmt::Display for SessionId {
 pub struct StepId(Uuid);
 
 impl StepId {
+    /// Create a new unique step ID.
+    #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
@@ -73,6 +79,8 @@ impl fmt::Display for StepId {
 pub struct SnapshotId(Uuid);
 
 impl SnapshotId {
+    /// Create a new unique snapshot ID.
+    #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }

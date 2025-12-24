@@ -1,3 +1,17 @@
+// Test module - relaxed lint rules
+#![allow(clippy::default_trait_access)]
+#![allow(clippy::indexing_slicing)]
+#![allow(clippy::unreadable_literal)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::inefficient_to_string)]
+#![allow(clippy::panic)]
+#![allow(clippy::manual_assert)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(missing_docs)]
+
 use std::fs;
 use std::path::PathBuf;
 

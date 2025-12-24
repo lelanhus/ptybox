@@ -20,3 +20,6 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 serde_yml = { workspace = true }
+
+[lints]
+workspace = true

@@ -23,3 +23,73 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 portable-pty = "0.8"
 vt100 = "0.15"
 uuid = { version = "1.10", features = ["v4", "serde"] }
+
+# ============================================================================
+# WORKSPACE LINTS - MAXIMUM STRICTNESS
+# ============================================================================
+# All crates inherit these via [lints] workspace = true
+
+[workspace.lints.rust]
+# Deny unsafe code across the workspace (deny allows override, forbid does not)
+# Fixtures crate will #![allow(unsafe_code)] for terminal ioctl
+unsafe_code = "deny"
+# Documentation lint: warn for now, upgrade to deny once docs complete
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# ============ CORE GROUPS (ALL DENY, priority -1 so individual lints override) ============
+all = { level = "deny", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+
+# ============ PEDANTIC (DENY WITH EXCEPTIONS) ============
+pedantic = { level = "deny", priority = -1 }
+module_name_repetitions = "allow"  # Common in public APIs
+similar_names = "allow"            # Too aggressive for domain-specific naming
+too_many_lines = "allow"           # Arbitrary limit, prefer cognitive_complexity
+missing_errors_doc = "allow"       # Enable later once docs are complete
+struct_excessive_bools = "allow"   # Policy/Style structs legitimately have many bool flags
+single_match_else = "allow"        # Match is often clearer than if-let for complex arms
+needless_pass_by_value = "allow"   # Often clearer APIs, Copy types are cheap
+redundant_else = "allow"           # Else block often aids readability
+must_use_candidate = "allow"       # Too many false positives; add manually when needed
+assigning_clones = "allow"         # Minor optimization, not worth enforcing
+map_unwrap_or = "allow"            # map().unwrap_or() often reads better
+redundant_closure_for_method_calls = "allow"  # Closures sometimes clearer
+case_sensitive_file_extension_comparisons = "allow"  # Intentional for .sh detection
+
+# ============ SECURITY-CRITICAL (FROM RESTRICTION GROUP) ============
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+exit = "deny"
+dbg_macro = "deny"
+unreachable = "deny"
+
+# ============ ERROR HANDLING ============
+unwrap_in_result = "deny"
+missing_panics_doc = "deny"
+
+# ============ PRODUCTION SAFETY ============
+print_stdout = "deny"  # Use tracing instead; CLI will override
+print_stderr = "deny"  # Use tracing instead; CLI will override
+
+# ============ MEMORY SAFETY ============
+cast_ptr_alignment = "deny"
+fn_to_numeric_cast_any = "deny"
+indexing_slicing = "deny"  # Prefer .get() to prevent panics
+
+# ============ INTEGER SAFETY ============
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_possible_wrap = "deny"
+
+# ============ CARGO ============
+cargo = { level = "deny", priority = -1 }
+multiple_crate_versions = "allow"  # Often unavoidable with transitive deps
+cargo_common_metadata = "allow"    # Not published to crates.io yet

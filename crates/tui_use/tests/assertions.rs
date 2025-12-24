@@ -1,6 +1,20 @@
+// Test module - relaxed lint rules
+#![allow(clippy::default_trait_access)]
+#![allow(clippy::indexing_slicing)]
+#![allow(clippy::unreadable_literal)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::inefficient_to_string)]
+#![allow(clippy::panic)]
+#![allow(clippy::manual_assert)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(missing_docs)]
+
 use tui_use::assertions::evaluate;
-use tui_use::model::PROTOCOL_VERSION;
 use tui_use::model::scenario::Assertion;
+use tui_use::model::PROTOCOL_VERSION;
 use tui_use::model::{Cursor, Observation, RunId, ScreenSnapshot, SnapshotId};
 
 fn observation_with_lines(lines: &[&str]) -> Observation {
@@ -55,4 +69,17 @@ fn cursor_at_fails_when_position_mismatch() {
     let (passed, message, _) = evaluate(&observation, &assertion);
     assert!(!passed);
     assert!(message.is_some());
+}
+
+#[test]
+fn regex_match_passes_when_pattern_matches() {
+    let observation = observation_with_lines(&["hello world"]);
+    let assertion = Assertion {
+        assertion_type: "regex_match".to_string(),
+        payload: serde_json::json!({"pattern": "hello\\s+world"}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(passed);
+    assert!(message.is_none());
 }

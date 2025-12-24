@@ -404,11 +404,16 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                 .terminate_process_group(Duration::from_millis(200))
                 .ok()
                 .flatten()
-                .map(|status| ExitStatus {
-                    success: status.success(),
-                    exit_code: Some(status.exit_code() as i32),
-                    signal: None,
-                    terminated_by_harness: true,
+                .map(|status| {
+                    // Exit codes are typically 0-255, safe to cast
+                    #[allow(clippy::cast_possible_wrap)]
+                    let code = status.exit_code() as i32;
+                    ExitStatus {
+                        success: status.success(),
+                        exit_code: Some(code),
+                        signal: None,
+                        terminated_by_harness: true,
+                    }
                 }),
             None => {
                 let max_runtime = Duration::from_millis(policy.budgets.max_runtime_ms);
@@ -432,12 +437,17 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                 }
                 let remaining = max_runtime - elapsed;
                 match session.wait_for_exit(remaining)? {
-                    Some(status) => Some(ExitStatus {
-                        success: status.success(),
-                        exit_code: Some(status.exit_code() as i32),
-                        signal: None,
-                        terminated_by_harness: false,
-                    }),
+                    Some(status) => {
+                        // Exit codes are typically 0-255, safe to cast
+                        #[allow(clippy::cast_possible_wrap)]
+                        let code = status.exit_code() as i32;
+                        Some(ExitStatus {
+                            success: status.success(),
+                            exit_code: Some(code),
+                            signal: None,
+                            terminated_by_harness: false,
+                        })
+                    }
                     None => {
                         let termination =
                             session.terminate_process_group(Duration::from_millis(200));
@@ -630,9 +640,12 @@ pub fn run_exec_with_options(
 
         let exit_status = loop {
             if let Some(status) = session.wait_for_exit(Duration::from_millis(0))? {
+                // Exit codes are typically 0-255, safe to cast
+                #[allow(clippy::cast_possible_wrap)]
+                let code = status.exit_code() as i32;
                 break ExitStatus {
                     success: status.success(),
-                    exit_code: Some(status.exit_code() as i32),
+                    exit_code: Some(code),
                     signal: None,
                     terminated_by_harness: false,
                 };
@@ -927,11 +940,14 @@ fn condition_satisfied(
             }
         }
         "cursor_at" => {
+            // Terminal coordinates are always small, safe to truncate
+            #[allow(clippy::cast_possible_truncation)]
             let row = condition
                 .payload
                 .get("row")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u16;
+            #[allow(clippy::cast_possible_truncation)]
             let col = condition
                 .payload
                 .get("col")
@@ -1000,7 +1016,10 @@ fn enforce_exec_budgets(
 }
 
 fn elapsed_ms(started_at: &Instant) -> u64 {
-    started_at.elapsed().as_millis() as u64
+    // Elapsed time in practice is always well under u64::MAX milliseconds
+    #[allow(clippy::cast_possible_truncation)]
+    let ms = started_at.elapsed().as_millis() as u64;
+    ms
 }
 
 struct SpawnCommand {
@@ -1021,7 +1040,7 @@ fn build_spawn_command(
             let profile_path = if let Some(dir) = artifacts_dir {
                 dir.join("sandbox.sb")
             } else {
-                std::env::temp_dir().join(format!("tui-use-{}.sb", run_id))
+                std::env::temp_dir().join(format!("tui-use-{run_id}.sb"))
             };
             sandbox::write_profile(&profile_path, policy)?;
             let mut sandbox_args = vec!["-f".to_string(), profile_path.display().to_string()];

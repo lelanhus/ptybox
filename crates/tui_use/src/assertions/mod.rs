@@ -1,7 +1,11 @@
-use crate::model::Observation;
 use crate::model::scenario::Assertion;
+use crate::model::Observation;
 use serde_json::Value;
 
+/// Evaluate an assertion against an observation.
+///
+/// Returns a tuple of (passed, error message, context).
+#[must_use]
 pub fn evaluate(
     observation: &Observation,
     assertion: &Assertion,
@@ -11,7 +15,7 @@ pub fn evaluate(
             let text = assertion
                 .payload
                 .get("text")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .unwrap_or("");
             let joined = observation.screen.lines.join("\n");
             let passed = joined.contains(text);
@@ -26,7 +30,7 @@ pub fn evaluate(
             let pattern = assertion
                 .payload
                 .get("pattern")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .unwrap_or("");
             let joined = observation.screen.lines.join("\n");
             let regex = regex::Regex::new(pattern);
@@ -48,15 +52,18 @@ pub fn evaluate(
             }
         }
         "cursor_at" => {
+            // Row/col values are terminal coordinates, always small enough for u16
+            #[allow(clippy::cast_possible_truncation)]
             let row = assertion
                 .payload
                 .get("row")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .unwrap_or(0) as u16;
+            #[allow(clippy::cast_possible_truncation)]
             let col = assertion
                 .payload
                 .get("col")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .unwrap_or(0) as u16;
             let cursor = &observation.screen.cursor;
             let passed = cursor.row == row && cursor.col == col;

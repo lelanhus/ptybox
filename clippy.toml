@@ -1,0 +1,74 @@
+# Clippy Configuration for tui-use
+# Maximum strictness - all warnings treated as errors
+#
+# Reference: https://doc.rust-lang.org/clippy/configuration.html
+
+# ============================================================================
+# COMPLEXITY THRESHOLDS
+# ============================================================================
+
+# Cognitive complexity threshold (default: 25, our stricter value: 15)
+# Functions exceeding this trigger clippy::cognitive_complexity
+cognitive-complexity-threshold = 15
+
+# Type complexity threshold (default: 250)
+# Triggers clippy::type_complexity for overly complex types
+type-complexity-threshold = 200
+
+# Maximum arguments before triggering too_many_arguments (default: 7)
+too-many-arguments-threshold = 7
+
+# ============================================================================
+# DOCUMENTATION
+# ============================================================================
+
+# Project-specific valid identifiers for doc_markdown lint
+# These won't trigger "should be wrapped in backticks" warnings
+doc-valid-idents = [
+    "TUI",
+    "PTY",
+    "ANSI",
+    "VT",
+    "VT100",
+    "macOS",
+    "NDJSON",
+    "JSON",
+    "YAML",
+    "UTF-8",
+    "ASCII",
+    "CLI",
+    "API",
+    "POSIX",
+    "SIGTERM",
+    "SIGKILL",
+    "STDIN",
+    "STDOUT",
+    "STDERR",
+]
+
+# ============================================================================
+# NAMING
+# ============================================================================
+
+# Single char binding names threshold (default: 4)
+# Allows i, j, k, n etc. for loop indices
+single-char-binding-names-threshold = 4
+
+# ============================================================================
+# SECURITY: DISALLOWED METHODS
+# ============================================================================
+
+# These methods are not thread-safe and should never be used directly
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "not thread-safe; use Command::env() for subprocess environment" },
+    { path = "std::env::remove_var", reason = "not thread-safe; avoid modifying process environment" },
+]
+
+# ============================================================================
+# SECURITY: DISALLOWED TYPES (optional, uncomment if needed)
+# ============================================================================
+
+# Uncomment to enforce explicit error types over trait objects
+# disallowed-types = [
+#     { path = "std::error::Error", reason = "use concrete error types for stable error codes" },
+# ]

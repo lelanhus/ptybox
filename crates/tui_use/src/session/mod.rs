@@ -129,12 +129,15 @@ impl Session {
                 Ok(())
             }
             ActionType::Resize => {
+                // Terminal dimensions are always small, safe to truncate
+                #[allow(clippy::cast_possible_truncation)]
                 let rows = action
                     .payload
                     .get("rows")
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| RunnerError::protocol("E_PROTOCOL", "missing rows"))?
                     as u16;
+                #[allow(clippy::cast_possible_truncation)]
                 let cols = action
                     .payload
                     .get("cols")
@@ -211,7 +214,9 @@ impl Session {
             protocol_version: PROTOCOL_VERSION,
             run_id: self.run_id,
             session_id: self.session_id,
-            timestamp_ms: self.started_at.elapsed().as_millis() as u64,
+            // Elapsed time is always well under u64::MAX
+            #[allow(clippy::cast_possible_truncation)]
+            timestamp_ms: { self.started_at.elapsed().as_millis() as u64 },
             screen: snapshot,
             transcript_delta,
             events: Vec::new(),
@@ -242,6 +247,8 @@ impl Session {
     pub fn terminate(&mut self) -> Result<(), RunnerError> {
         #[cfg(unix)]
         if let Some(pid) = self.child.process_id() {
+            // Process IDs are always positive and fit in i32
+            #[allow(clippy::cast_possible_wrap)]
             let pgid = Pid::from_raw(pid as i32);
             return signal_process_group(pgid, Signal::SIGTERM);
         }
@@ -257,6 +264,8 @@ impl Session {
     ) -> Result<Option<portable_pty::ExitStatus>, RunnerError> {
         #[cfg(unix)]
         if let Some(pid) = self.child.process_id() {
+            // Process IDs are always positive and fit in i32
+            #[allow(clippy::cast_possible_wrap)]
             let pgid = Pid::from_raw(pid as i32);
             signal_process_group(pgid, Signal::SIGTERM)?;
             if let Some(status) = self.wait_for_exit(grace)? {
@@ -278,8 +287,8 @@ impl Session {
 #[cfg(unix)]
 fn signal_process_group(pgid: Pid, signal: Signal) -> Result<(), RunnerError> {
     match killpg(pgid, signal) {
-        Ok(()) => Ok(()),
-        Err(nix::errno::Errno::ESRCH) => Ok(()),
+        // ESRCH means process already gone, which is fine
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
         Err(err) => Err(RunnerError::io(
             "E_IO",
             "failed to signal process group",
@@ -312,6 +321,8 @@ impl Session {
     fn cleanup_process_best_effort(&mut self) {
         #[cfg(unix)]
         if let Some(pid) = self.child.process_id() {
+            // Process IDs are always positive and fit in i32
+            #[allow(clippy::cast_possible_wrap)]
             let pgid = Pid::from_raw(pid as i32);
 
             // Try graceful termination first

@@ -1,0 +1,28 @@
+# Cargo Configuration for tui-use
+# Enforces strict warning policy at build time
+#
+# Reference: https://doc.rust-lang.org/cargo/reference/config.html
+
+[build]
+# Treat all warnings as errors during compilation
+# This ensures CI-level strictness in local development
+rustflags = ["-D", "warnings"]
+
+# ============================================================================
+# ALIASES
+# ============================================================================
+
+[alias]
+# Convenience aliases for common development commands
+
+# Run all lints with maximum strictness
+lint = "clippy --workspace --all-targets --all-features -- -D warnings"
+
+# Fix all auto-fixable issues
+fix-all = "clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged"
+
+# Check formatting
+fmt-check = "fmt --all -- --check"
+
+# Run full CI suite locally
+ci = ["fmt-check", "lint", "test --workspace --all-features"]

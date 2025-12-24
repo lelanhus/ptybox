@@ -1,4 +1,5 @@
 use crate::runner::{RunnerError, RunnerResult};
+use std::fmt::Write as FmtWrite;
 use std::fs::OpenOptions;
 use std::io::Write;
 #[cfg(unix)]
@@ -91,16 +92,17 @@ fn build_profile(policy: &crate::model::policy::Policy) -> RunnerResult<String> 
 
     for path in &policy.fs.allowed_read {
         validate_seatbelt_path(path)?;
-        profile.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", path));
+        // write! to String is infallible, ignore result
+        let _ = writeln!(profile, "(allow file-read* (subpath \"{path}\"))");
     }
     for path in &policy.fs.allowed_write {
         validate_seatbelt_path(path)?;
-        profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", path));
+        let _ = writeln!(profile, "(allow file-write* (subpath \"{path}\"))");
     }
 
     for exe in &policy.exec.allowed_executables {
         validate_seatbelt_path(exe)?;
-        profile.push_str(&format!("(allow process-exec (literal \"{}\"))\n", exe));
+        let _ = writeln!(profile, "(allow process-exec (literal \"{exe}\"))");
     }
 
     Ok(profile)
