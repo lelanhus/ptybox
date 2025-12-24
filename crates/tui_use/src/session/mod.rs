@@ -4,8 +4,12 @@ use crate::policy::apply_env_policy;
 use crate::runner::RunnerError;
 use crate::terminal::Terminal;
 #[cfg(unix)]
-use nix::fcntl::{FcntlArg, OFlag, fcntl};
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use nix::fcntl::{fcntl, FcntlArg, OFlag};
+#[cfg(unix)]
+use nix::sys::signal::{killpg, Signal};
+#[cfg(unix)]
+use nix::unistd::Pid;
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -145,9 +149,11 @@ impl Session {
                         pixel_height: 0,
                     })
                     .map_err(|err| RunnerError::io("E_IO", "failed to resize pty", err))?;
-                if let Ok(mut terminal) = self.terminal.lock() {
-                    terminal.resize(TerminalSize { rows, cols });
-                }
+                let mut terminal = self
+                    .terminal
+                    .lock()
+                    .map_err(|_| RunnerError::internal("E_INTERNAL", "terminal lock poisoned"))?;
+                terminal.resize(TerminalSize { rows, cols });
                 Ok(())
             }
             ActionType::Wait => Ok(()),
@@ -179,17 +185,28 @@ impl Session {
             }
         }
 
+        let transcript_delta = if total.is_empty() {
+            None
+        } else {
+            match std::str::from_utf8(&total) {
+                Ok(value) => Some(value.to_string()),
+                Err(err) => {
+                    return Err(RunnerError::terminal_parse(
+                        "E_TERMINAL_PARSE",
+                        "terminal output was not valid UTF-8",
+                        err,
+                        Some(err.valid_up_to()),
+                    ));
+                }
+            }
+        };
+
         let mut terminal = self
             .terminal
             .lock()
             .map_err(|_| RunnerError::internal("E_INTERNAL", "terminal lock poisoned"))?;
         terminal.process_bytes(&total);
         let snapshot = terminal.snapshot()?;
-        let transcript_delta = if total.is_empty() {
-            None
-        } else {
-            Some(String::from_utf8_lossy(&total).to_string())
-        };
         Ok(Observation {
             protocol_version: PROTOCOL_VERSION,
             run_id: self.run_id,
@@ -223,13 +240,51 @@ impl Session {
     }
 
     pub fn terminate(&mut self) -> Result<(), RunnerError> {
+        #[cfg(unix)]
+        if let Some(pid) = self.child.process_id() {
+            let pgid = Pid::from_raw(pid as i32);
+            return signal_process_group(pgid, Signal::SIGTERM);
+        }
+
         self.child
             .kill()
             .map_err(|err| RunnerError::io("E_IO", "failed to terminate child", err))
     }
 
+    pub fn terminate_process_group(
+        &mut self,
+        grace: Duration,
+    ) -> Result<Option<portable_pty::ExitStatus>, RunnerError> {
+        #[cfg(unix)]
+        if let Some(pid) = self.child.process_id() {
+            let pgid = Pid::from_raw(pid as i32);
+            signal_process_group(pgid, Signal::SIGTERM)?;
+            if let Some(status) = self.wait_for_exit(grace)? {
+                return Ok(Some(status));
+            }
+            signal_process_group(pgid, Signal::SIGKILL)?;
+            return self.wait_for_exit(Duration::from_millis(200));
+        }
+
+        self.terminate()?;
+        self.wait_for_exit(grace)
+    }
+
     pub fn session_id(&self) -> SessionId {
         self.session_id
+    }
+}
+
+#[cfg(unix)]
+fn signal_process_group(pgid: Pid, signal: Signal) -> Result<(), RunnerError> {
+    match killpg(pgid, signal) {
+        Ok(()) => Ok(()),
+        Err(nix::errno::Errno::ESRCH) => Ok(()),
+        Err(err) => Err(RunnerError::io(
+            "E_IO",
+            "failed to signal process group",
+            err,
+        )),
     }
 }
 
@@ -249,4 +304,48 @@ fn key_to_bytes(key: &str) -> Result<Vec<u8>, RunnerError> {
         }
     };
     Ok(bytes)
+}
+
+impl Session {
+    /// Best-effort cleanup of the child process. Used by Drop.
+    /// All errors are silently ignored since Drop cannot propagate errors.
+    fn cleanup_process_best_effort(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.child.process_id() {
+            let pgid = Pid::from_raw(pid as i32);
+
+            // Try graceful termination first
+            let _ = signal_process_group(pgid, Signal::SIGTERM);
+
+            // Wait briefly for graceful exit (100ms max to keep Drop fast)
+            let deadline = Instant::now() + Duration::from_millis(100);
+            while Instant::now() < deadline {
+                if self.child.try_wait().ok().flatten().is_some() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+
+            // Still alive, force kill (don't wait for SIGKILL to complete)
+            let _ = signal_process_group(pgid, Signal::SIGKILL);
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = self.child.kill();
+        }
+    }
+}
+
+impl Drop for Session {
+    /// Performs best-effort cleanup of the child process.
+    ///
+    /// Sends SIGTERM to the process group, waits up to 100ms for graceful exit,
+    /// then sends SIGKILL if still alive. All errors are silently ignored.
+    ///
+    /// For controlled termination with error handling, use `terminate_process_group()`
+    /// before the Session is dropped.
+    fn drop(&mut self) {
+        self.cleanup_process_best_effort();
+    }
 }

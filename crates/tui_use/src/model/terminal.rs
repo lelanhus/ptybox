@@ -1,6 +1,8 @@
 use crate::model::SnapshotId;
 use serde::{Deserialize, Serialize};
 
+pub const SNAPSHOT_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalSize {
     pub rows: u16,

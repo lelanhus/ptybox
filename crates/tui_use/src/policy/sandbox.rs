@@ -1,11 +1,33 @@
 use crate::runner::{RunnerError, RunnerResult};
-use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 #[derive(Clone, Debug)]
 pub struct SandboxConfig {
     pub profile_path: String,
+}
+
+/// Validates that a path is safe to embed in a Seatbelt profile.
+/// Rejects paths containing characters that could escape the S-expression string literal.
+fn validate_seatbelt_path(s: &str) -> Result<(), RunnerError> {
+    if s.contains('"')
+        || s.contains('(')
+        || s.contains(')')
+        || s.contains('\n')
+        || s.contains('\r')
+        || s.contains('\0')
+    {
+        return Err(RunnerError::policy_denied(
+            "E_POLICY_DENIED",
+            "path contains characters unsafe for sandbox profiles",
+            Some(serde_json::json!({ "path": s })),
+        ));
+    }
+    Ok(())
 }
 
 pub fn ensure_sandbox_available() -> RunnerResult<()> {
@@ -33,13 +55,30 @@ pub fn ensure_sandbox_available() -> RunnerResult<()> {
 }
 
 pub fn write_profile(path: &Path, policy: &crate::model::policy::Policy) -> RunnerResult<()> {
-    let content = build_profile(policy);
-    fs::write(path, content)
+    let content = build_profile(policy)?;
+
+    // Write with restrictive permissions (0600) to prevent other users from reading sandbox rules
+    #[cfg(unix)]
+    {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|err| RunnerError::io("E_IO", "failed to create sandbox profile", err))?;
+        file.write_all(content.as_bytes())
+            .map_err(|err| RunnerError::io("E_IO", "failed to write sandbox profile", err))?;
+    }
+
+    #[cfg(not(unix))]
+    std::fs::write(path, content)
         .map_err(|err| RunnerError::io("E_IO", "failed to write sandbox profile", err))?;
+
     Ok(())
 }
 
-fn build_profile(policy: &crate::model::policy::Policy) -> String {
+fn build_profile(policy: &crate::model::policy::Policy) -> RunnerResult<String> {
     let mut profile = String::new();
     profile.push_str("(version 1)\n");
     profile.push_str("(deny default)\n");
@@ -51,15 +90,18 @@ fn build_profile(policy: &crate::model::policy::Policy) -> String {
     }
 
     for path in &policy.fs.allowed_read {
+        validate_seatbelt_path(path)?;
         profile.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", path));
     }
     for path in &policy.fs.allowed_write {
+        validate_seatbelt_path(path)?;
         profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", path));
     }
 
     for exe in &policy.exec.allowed_executables {
+        validate_seatbelt_path(exe)?;
         profile.push_str(&format!("(allow process-exec (literal \"{}\"))\n", exe));
     }
 
-    profile
+    Ok(profile)
 }

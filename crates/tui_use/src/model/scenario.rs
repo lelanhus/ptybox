@@ -3,6 +3,8 @@ use crate::model::terminal::TerminalSize;
 use crate::model::{RunId, StepId};
 use serde::{Deserialize, Serialize};
 
+pub const SCENARIO_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Scenario {
     pub scenario_version: u32,

@@ -3,17 +3,19 @@ resolver = "2"
 members = [
   "crates/tui_use",
   "crates/tui-use-cli",
+  "crates/tui-use-fixtures",
 ]
 
 [workspace.package]
-edition = "2024"
+edition = "2021"
+rust-version = "1.74"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.9"
+serde_yml = "0.0.12"
 thiserror = "2.0"
 miette = { version = "7.2", features = ["fancy"] }
 tracing = "0.1"

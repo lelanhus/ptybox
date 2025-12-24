@@ -9,7 +9,7 @@ pub fn load_scenario_file(path: &str) -> RunnerResult<Scenario> {
     let data = fs::read_to_string(path)
         .map_err(|err| RunnerError::io("E_IO", "failed to read scenario file", err))?;
     if path.ends_with(".yaml") || path.ends_with(".yml") {
-        serde_yaml::from_str(&data)
+        serde_yml::from_str(&data)
             .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to parse yaml", err))
     } else {
         serde_json::from_str(&data)

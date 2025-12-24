@@ -1,11 +1,14 @@
 use crate::artifacts::{ArtifactsWriter, ArtifactsWriterConfig};
 use crate::model::policy::Policy;
 use crate::model::{
-    Action, ActionType, AssertionResult, ExitStatus, PROTOCOL_VERSION, RunConfig, RunId, RunResult,
-    RunStatus, Scenario, StepResult, StepStatus, TerminalSize,
+    Action, ActionType, AssertionResult, ExitStatus, NormalizationRecord, RunConfig, RunId,
+    RunResult, RunStatus, Scenario, StepResult, StepStatus, TerminalSize, NORMALIZATION_VERSION,
+    PROTOCOL_VERSION,
 };
 use crate::policy::{
-    EffectivePolicy, sandbox, validate_env_policy, validate_fs_policy, validate_sandbox_mode,
+    sandbox, validate_artifacts_dir, validate_artifacts_policy, validate_env_policy,
+    validate_fs_policy, validate_network_policy, validate_policy_version, validate_sandbox_mode,
+    validate_write_access, EffectivePolicy,
 };
 use crate::scenario::load_policy_ref;
 use crate::session::{Session, SessionConfig};
@@ -70,7 +73,33 @@ impl RunnerError {
         }
     }
 
+    pub fn terminal_parse(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        err: impl std::fmt::Display,
+        valid_up_to: Option<usize>,
+    ) -> Self {
+        let mut context = serde_json::Map::new();
+        context.insert("source".to_string(), Value::String(err.to_string()));
+        if let Some(valid_up_to) = valid_up_to {
+            context.insert("valid_up_to".to_string(), Value::Number(valid_up_to.into()));
+        }
+        Self {
+            code: code.into(),
+            message: message.into(),
+            context: Some(Value::Object(context)),
+        }
+    }
+
     pub fn internal(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            context: None,
+        }
+    }
+
+    pub fn process_exit(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -106,20 +135,30 @@ pub struct RunnerOptions {
     pub artifacts: Option<ArtifactsWriterConfig>,
 }
 
+fn resolve_artifacts_config(
+    policy: &Policy,
+    options: Option<ArtifactsWriterConfig>,
+) -> Option<ArtifactsWriterConfig> {
+    if options.is_some() {
+        return options;
+    }
+    if policy.artifacts.enabled {
+        if let Some(dir) = policy.artifacts.dir.as_ref() {
+            return Some(ArtifactsWriterConfig {
+                dir: PathBuf::from(dir),
+                overwrite: policy.artifacts.overwrite,
+            });
+        }
+    }
+    None
+}
+
 pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<RunResult> {
     let run_id = RunId::new();
     let run_started = Instant::now();
     let scenario_clone = scenario.clone();
 
-    let artifacts_dir = options.artifacts.as_ref().map(|config| config.dir.clone());
-    let mut artifacts = options
-        .artifacts
-        .map(|config| ArtifactsWriter::new(run_id, config))
-        .transpose()?;
-
-    if let Some(writer) = artifacts.as_mut() {
-        writer.write_scenario(&scenario_clone)?;
-    }
+    let mut artifacts: Option<ArtifactsWriter> = None;
 
     let mut policy_for_error: Option<Policy> = None;
     let mut cleanup_path: Option<PathBuf> = None;
@@ -127,6 +166,32 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
     let result: RunnerResult<RunResult> = (|| {
         let policy = load_policy_ref(&scenario.run.policy)?;
         policy_for_error = Some(policy.clone());
+
+        validate_fs_policy(&policy.fs, policy.fs_write_unsafe_ack)?;
+        validate_artifacts_policy(&policy)?;
+
+        let artifacts_config = resolve_artifacts_config(&policy, options.artifacts);
+        let artifacts_dir = artifacts_config.as_ref().map(|config| config.dir.clone());
+
+        validate_write_access(&policy, artifacts_dir.as_deref())?;
+
+        if let Some(config) = artifacts_config.clone() {
+            validate_artifacts_dir(&config.dir, &policy.fs)?;
+            let mut writer = ArtifactsWriter::new(run_id, config)?;
+            writer.write_normalization(&NormalizationRecord {
+                normalization_version: NORMALIZATION_VERSION,
+                filters: Vec::new(),
+                strict: false,
+                source: crate::model::NormalizationSource::None,
+                rules: Vec::new(),
+            })?;
+            artifacts = Some(writer);
+        }
+
+        if let Some(writer) = artifacts.as_mut() {
+            writer.write_scenario(&scenario_clone)?;
+        }
+
         validate_policy(&policy)?;
 
         if scenario.steps.len() as u64 > policy.budgets.max_steps {
@@ -229,7 +294,11 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                 let observation = match observation {
                     Ok(obs) => obs,
                     Err(err) => {
-                        last_error = Some(err);
+                        if err.code == "E_TIMEOUT" {
+                            last_error = Some(with_step_timeout_context(err, step));
+                        } else {
+                            last_error = Some(err);
+                        }
                         status = StepStatus::Errored;
                         continue;
                     }
@@ -244,7 +313,12 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                     last_error = Some(RunnerError::timeout(
                         "E_TIMEOUT",
                         "output budget exceeded",
-                        serde_json::json!({"max_output_bytes": policy.budgets.max_output_bytes}),
+                        Some(step_context(
+                            step,
+                            Some(serde_json::json!({
+                                "max_output_bytes": policy.budgets.max_output_bytes
+                            })),
+                        )),
                     ));
                     status = StepStatus::Errored;
                     break;
@@ -254,7 +328,12 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                     last_error = Some(RunnerError::timeout(
                         "E_TIMEOUT",
                         "snapshot budget exceeded",
-                        serde_json::json!({"max_snapshot_bytes": policy.budgets.max_snapshot_bytes}),
+                        Some(step_context(
+                            step,
+                            Some(serde_json::json!({
+                                "max_snapshot_bytes": policy.budgets.max_snapshot_bytes
+                            })),
+                        )),
                     ));
                     status = StepStatus::Errored;
                     break;
@@ -265,6 +344,7 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                     if let Some(delta) = &observation.transcript_delta {
                         writer.write_transcript(delta)?;
                     }
+                    writer.write_observation(&observation)?;
                 }
 
                 let mut assertions_passed = true;
@@ -315,14 +395,70 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
         }
 
         let final_observation = session.observe(Duration::from_millis(10)).ok();
-        let exit_status = session
-            .wait_for_exit(Duration::from_millis(policy.budgets.max_runtime_ms))?
-            .map(|status| ExitStatus {
-                success: status.success(),
-                exit_code: Some(status.exit_code() as i32),
-                signal: None,
-                terminated_by_harness: false,
-            });
+        if let (Some(writer), Some(observation)) = (artifacts.as_mut(), final_observation.as_ref())
+        {
+            writer.write_observation(observation)?;
+        }
+        let exit_status = match run_error.as_ref() {
+            Some(_) => session
+                .terminate_process_group(Duration::from_millis(200))
+                .ok()
+                .flatten()
+                .map(|status| ExitStatus {
+                    success: status.success(),
+                    exit_code: Some(status.exit_code() as i32),
+                    signal: None,
+                    terminated_by_harness: true,
+                }),
+            None => {
+                let max_runtime = Duration::from_millis(policy.budgets.max_runtime_ms);
+                let elapsed = run_started.elapsed();
+                if elapsed >= max_runtime {
+                    let termination = session.terminate_process_group(Duration::from_millis(200));
+                    let context = match termination {
+                        Ok(_) => {
+                            serde_json::json!({"max_runtime_ms": policy.budgets.max_runtime_ms})
+                        }
+                        Err(err) => serde_json::json!({
+                            "max_runtime_ms": policy.budgets.max_runtime_ms,
+                            "termination_error": err.to_string()
+                        }),
+                    };
+                    return Err(RunnerError::timeout(
+                        "E_TIMEOUT",
+                        "run exceeded max runtime budget",
+                        context,
+                    ));
+                }
+                let remaining = max_runtime - elapsed;
+                match session.wait_for_exit(remaining)? {
+                    Some(status) => Some(ExitStatus {
+                        success: status.success(),
+                        exit_code: Some(status.exit_code() as i32),
+                        signal: None,
+                        terminated_by_harness: false,
+                    }),
+                    None => {
+                        let termination =
+                            session.terminate_process_group(Duration::from_millis(200));
+                        let context = match termination {
+                            Ok(_) => {
+                                serde_json::json!({"max_runtime_ms": policy.budgets.max_runtime_ms})
+                            }
+                            Err(err) => serde_json::json!({
+                                "max_runtime_ms": policy.budgets.max_runtime_ms,
+                                "termination_error": err.to_string()
+                            }),
+                        };
+                        return Err(RunnerError::timeout(
+                            "E_TIMEOUT",
+                            "run exceeded max runtime budget",
+                            context,
+                        ));
+                    }
+                }
+            }
+        };
 
         let ended_at = elapsed_ms(&run_started);
 
@@ -428,16 +564,32 @@ pub fn run_exec_with_options(
 ) -> RunnerResult<RunResult> {
     let run_id = RunId::new();
     let run_started = Instant::now();
-
-    let artifacts_dir = options.artifacts.as_ref().map(|config| config.dir.clone());
-    let mut artifacts = options
-        .artifacts
-        .map(|config| ArtifactsWriter::new(run_id, config))
-        .transpose()?;
+    let mut artifacts: Option<ArtifactsWriter> = None;
 
     let mut cleanup_path: Option<PathBuf> = None;
 
     let result: RunnerResult<RunResult> = (|| {
+        validate_fs_policy(&policy.fs, policy.fs_write_unsafe_ack)?;
+        validate_artifacts_policy(&policy)?;
+
+        let artifacts_config = resolve_artifacts_config(&policy, options.artifacts);
+        let artifacts_dir = artifacts_config.as_ref().map(|config| config.dir.clone());
+
+        validate_write_access(&policy, artifacts_dir.as_deref())?;
+
+        if let Some(config) = artifacts_config.clone() {
+            validate_artifacts_dir(&config.dir, &policy.fs)?;
+            let mut writer = ArtifactsWriter::new(run_id, config)?;
+            writer.write_normalization(&NormalizationRecord {
+                normalization_version: NORMALIZATION_VERSION,
+                filters: Vec::new(),
+                strict: false,
+                source: crate::model::NormalizationSource::None,
+                rules: Vec::new(),
+            })?;
+            artifacts = Some(writer);
+        }
+
         validate_policy(&policy)?;
         let effective_policy = EffectivePolicy::new(policy.clone());
         let cwd = cwd.clone().or_else(|| policy.fs.working_dir.clone());
@@ -466,18 +618,52 @@ pub fn run_exec_with_options(
             env: policy.env.clone(),
         })?;
 
-        let final_observation = session.observe(Duration::from_millis(50)).ok();
-        let exit_status = session
-            .wait_for_exit(Duration::from_millis(policy.budgets.max_runtime_ms))?
-            .map(|status| ExitStatus {
-                success: status.success(),
-                exit_code: Some(status.exit_code() as i32),
-                signal: None,
-                terminated_by_harness: false,
-            });
+        let mut output_bytes: u64 = 0;
+        let max_runtime = Duration::from_millis(policy.budgets.max_runtime_ms);
+        let deadline = Instant::now() + max_runtime;
+
+        let mut final_observation = session.observe(Duration::from_millis(50))?;
+        enforce_exec_budgets(&mut session, &final_observation, &mut output_bytes, &policy)?;
+        if let Some(writer) = artifacts.as_mut() {
+            writer.write_observation(&final_observation)?;
+        }
+
+        let exit_status = loop {
+            if let Some(status) = session.wait_for_exit(Duration::from_millis(0))? {
+                break ExitStatus {
+                    success: status.success(),
+                    exit_code: Some(status.exit_code() as i32),
+                    signal: None,
+                    terminated_by_harness: false,
+                };
+            }
+
+            if Instant::now() > deadline {
+                let termination = session.terminate_process_group(Duration::from_millis(200));
+                let context = match termination {
+                    Ok(_) => serde_json::json!({"max_runtime_ms": policy.budgets.max_runtime_ms}),
+                    Err(err) => serde_json::json!({
+                        "max_runtime_ms": policy.budgets.max_runtime_ms,
+                        "termination_error": err.to_string()
+                    }),
+                };
+                return Err(RunnerError::timeout(
+                    "E_TIMEOUT",
+                    "run exceeded max runtime budget",
+                    context,
+                ));
+            }
+
+            let observation = session.observe(Duration::from_millis(50))?;
+            enforce_exec_budgets(&mut session, &observation, &mut output_bytes, &policy)?;
+            if let Some(writer) = artifacts.as_mut() {
+                writer.write_observation(&observation)?;
+            }
+            final_observation = observation;
+        };
 
         let ended_at = elapsed_ms(&run_started);
-        let status = if exit_status.as_ref().map(|s| s.success).unwrap_or(true) {
+        let status = if exit_status.success {
             RunStatus::Passed
         } else {
             RunStatus::Failed
@@ -511,8 +697,8 @@ pub fn run_exec_with_options(
             policy: policy.clone(),
             scenario: None,
             steps: None,
-            final_observation,
-            exit_status,
+            final_observation: Some(final_observation),
+            exit_status: Some(exit_status),
             error,
         };
 
@@ -564,9 +750,13 @@ pub fn run_exec_with_options(
 }
 
 fn validate_policy(policy: &Policy) -> RunnerResult<()> {
-    validate_sandbox_mode(&policy.sandbox)?;
+    validate_policy_version(policy)?;
+    validate_sandbox_mode(&policy.sandbox, policy.sandbox_unsafe_ack)?;
+    validate_network_policy(policy)?;
     validate_env_policy(&policy.env)?;
-    validate_fs_policy(&policy.fs)?;
+    validate_fs_policy(&policy.fs, policy.fs_write_unsafe_ack)?;
+    validate_artifacts_policy(policy)?;
+    validate_write_access(policy, None)?;
     Ok(())
 }
 
@@ -622,6 +812,22 @@ fn wait_for_condition(
     };
     let deadline = Instant::now() + wait_timeout;
 
+    // Pre-compile regex before the loop to avoid recompilation on each iteration
+    let compiled_regex = if wait_payload.condition.condition_type == "screen_matches" {
+        let pattern = wait_payload
+            .condition
+            .payload
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        Some(
+            regex::Regex::new(pattern)
+                .map_err(|_| RunnerError::protocol("E_PROTOCOL", "invalid regex"))?,
+        )
+    } else {
+        None
+    };
+
     loop {
         if Instant::now() > deadline {
             return Err(RunnerError::timeout(
@@ -632,13 +838,24 @@ fn wait_for_condition(
         }
 
         let observation = session.observe(Duration::from_millis(50))?;
-        if condition_satisfied(&observation, &wait_payload.condition)? {
-            return Ok(observation);
+
+        // Check for unexpected process exit for all condition types
+        if session.wait_for_exit(Duration::from_millis(0))?.is_some() {
+            if wait_payload.condition.condition_type == "process_exited" {
+                return Ok(observation);
+            }
+            // Process exited unexpectedly while waiting for another condition
+            return Err(RunnerError::process_exit(
+                "E_PROCESS_EXIT",
+                "process exited during wait",
+            ));
         }
 
-        if wait_payload.condition.condition_type == "process_exited"
-            && session.wait_for_exit(Duration::from_millis(0))?.is_some()
-        {
+        if condition_satisfied(
+            &observation,
+            &wait_payload.condition,
+            compiled_regex.as_ref(),
+        )? {
             return Ok(observation);
         }
 
@@ -646,9 +863,43 @@ fn wait_for_condition(
     }
 }
 
+fn action_type_label(action_type: &ActionType) -> &'static str {
+    match action_type {
+        ActionType::Key => "key",
+        ActionType::Text => "text",
+        ActionType::Resize => "resize",
+        ActionType::Wait => "wait",
+        ActionType::Terminate => "terminate",
+    }
+}
+
+fn step_context(step: &crate::model::Step, details: Option<Value>) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert("step_id".to_string(), Value::String(step.id.to_string()));
+    map.insert("step_name".to_string(), Value::String(step.name.clone()));
+    map.insert(
+        "action_type".to_string(),
+        Value::String(action_type_label(&step.action.action_type).to_string()),
+    );
+    map.insert(
+        "timeout_ms".to_string(),
+        Value::Number(step.timeout_ms.into()),
+    );
+    if let Some(details) = details {
+        map.insert("details".to_string(), details);
+    }
+    Value::Object(map)
+}
+
+fn with_step_timeout_context(err: RunnerError, step: &crate::model::Step) -> RunnerError {
+    let details = err.context.clone();
+    RunnerError::timeout(err.code, err.message, Some(step_context(step, details)))
+}
+
 fn condition_satisfied(
     observation: &crate::model::Observation,
     condition: &Condition,
+    compiled_regex: Option<&regex::Regex>,
 ) -> RunnerResult<bool> {
     match condition.condition_type.as_str() {
         "screen_contains" => {
@@ -660,14 +911,20 @@ fn condition_satisfied(
             Ok(observation.screen.lines.join("\n").contains(text))
         }
         "screen_matches" => {
-            let pattern = condition
-                .payload
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let re = regex::Regex::new(pattern)
-                .map_err(|_| RunnerError::protocol("E_PROTOCOL", "invalid regex"))?;
-            Ok(re.is_match(&observation.screen.lines.join("\n")))
+            // Use pre-compiled regex if available, otherwise compile (fallback)
+            let screen_text = observation.screen.lines.join("\n");
+            if let Some(re) = compiled_regex {
+                Ok(re.is_match(&screen_text))
+            } else {
+                let pattern = condition
+                    .payload
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let re = regex::Regex::new(pattern)
+                    .map_err(|_| RunnerError::protocol("E_PROTOCOL", "invalid regex"))?;
+                Ok(re.is_match(&screen_text))
+            }
         }
         "cursor_at" => {
             let row = condition
@@ -694,6 +951,52 @@ fn snapshot_bytes(snapshot: &crate::model::ScreenSnapshot) -> RunnerResult<u64> 
     let data = serde_json::to_vec(snapshot)
         .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to encode snapshot", err))?;
     Ok(data.len() as u64)
+}
+
+fn enforce_exec_budgets(
+    session: &mut Session,
+    observation: &crate::model::Observation,
+    output_bytes: &mut u64,
+    policy: &Policy,
+) -> RunnerResult<()> {
+    *output_bytes += observation
+        .transcript_delta
+        .as_ref()
+        .map(|s| s.len() as u64)
+        .unwrap_or(0);
+    if *output_bytes > policy.budgets.max_output_bytes {
+        let termination = session.terminate_process_group(Duration::from_millis(200));
+        let context = match termination {
+            Ok(_) => serde_json::json!({"max_output_bytes": policy.budgets.max_output_bytes}),
+            Err(err) => serde_json::json!({
+                "max_output_bytes": policy.budgets.max_output_bytes,
+                "termination_error": err.to_string()
+            }),
+        };
+        return Err(RunnerError::timeout(
+            "E_TIMEOUT",
+            "output budget exceeded",
+            context,
+        ));
+    }
+
+    if snapshot_bytes(&observation.screen)? > policy.budgets.max_snapshot_bytes {
+        let termination = session.terminate_process_group(Duration::from_millis(200));
+        let context = match termination {
+            Ok(_) => serde_json::json!({"max_snapshot_bytes": policy.budgets.max_snapshot_bytes}),
+            Err(err) => serde_json::json!({
+                "max_snapshot_bytes": policy.budgets.max_snapshot_bytes,
+                "termination_error": err.to_string()
+            }),
+        };
+        return Err(RunnerError::timeout(
+            "E_TIMEOUT",
+            "snapshot budget exceeded",
+            context,
+        ));
+    }
+
+    Ok(())
 }
 
 fn elapsed_ms(started_at: &Instant) -> u64 {

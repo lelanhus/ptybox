@@ -2,6 +2,7 @@
 name = "tui-use-cli"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
@@ -13,5 +14,9 @@ tui_use = { path = "../tui_use" }
 clap = { workspace = true }
 miette = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+serde_yml = { workspace = true }

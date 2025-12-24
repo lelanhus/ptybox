@@ -2,7 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use tui_use::model::policy::{
-    ArtifactsPolicy, Budgets, EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy, SandboxMode,
+    ArtifactsPolicy, Budgets, EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy, ReplayPolicy,
+    SandboxMode, POLICY_VERSION,
 };
 use tui_use::model::scenario::{
     Action, ActionType, PolicyRef, RunConfig, Scenario, ScenarioMetadata, Step,
@@ -16,15 +17,20 @@ fn temp_path(name: &str) -> PathBuf {
 }
 
 fn build_scenario() -> Scenario {
+    let temp_dir = std::env::temp_dir().display().to_string();
     let policy = Policy {
-        policy_version: 1,
+        policy_version: POLICY_VERSION,
         sandbox: SandboxMode::None,
+        sandbox_unsafe_ack: true,
         network: NetworkPolicy::Disabled,
+        network_unsafe_ack: true,
         fs: FsPolicy {
-            allowed_read: vec!["/".to_string()],
+            allowed_read: vec![temp_dir],
             allowed_write: vec![],
             working_dir: None,
         },
+        fs_write_unsafe_ack: false,
+        fs_strict_write: false,
         exec: ExecPolicy {
             allowed_executables: vec!["/bin/echo".to_string()],
             allow_shell: false,
@@ -36,6 +42,7 @@ fn build_scenario() -> Scenario {
         },
         budgets: Budgets::default(),
         artifacts: ArtifactsPolicy::default(),
+        replay: ReplayPolicy::default(),
     };
 
     Scenario {
@@ -72,7 +79,7 @@ fn load_scenario_from_json_and_yaml() {
     let yaml_path = std::env::temp_dir().join("tui-use-test-scenario.yaml");
 
     let json = serde_json::to_string(&scenario).unwrap();
-    let yaml = serde_yaml::to_string(&scenario).unwrap();
+    let yaml = serde_yml::to_string(&scenario).unwrap();
 
     fs::write(&json_path, json).unwrap();
     fs::write(&yaml_path, yaml).unwrap();
