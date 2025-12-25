@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish = false  # Internal testing crate
 
+[lib]
+name = "tui_use_fixtures"
+path = "src/lib.rs"
+
 [[bin]]
 name = "tui-use-echo-fixture"
 path = "src/bin/echo_tui.rs"
@@ -42,6 +46,8 @@ path = "src/bin/unicode_test.rs"
 
 [dependencies]
 libc = "0.2"
+tui_use = { path = "../tui_use" }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

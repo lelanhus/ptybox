@@ -1340,6 +1340,8 @@ name = "tui-use-fixtures"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "serde_json",
+ "tui_use",
 ]
 
 [[package]]
