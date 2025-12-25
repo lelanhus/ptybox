@@ -84,7 +84,7 @@ fn create_mock_artifacts(dir: &std::path::Path) {
         "lines": ["hello", "$"],
         "cells": null
     }"#;
-    fs::write(snapshots_dir.join("0001.json"), snapshot_json).expect("write snapshot");
+    fs::write(snapshots_dir.join("000001.json"), snapshot_json).expect("write snapshot");
 
     // Create transcript
     fs::write(dir.join("transcript.log"), "hello\n").expect("write transcript");
@@ -143,7 +143,10 @@ fn trace_embeds_run_metadata() {
         "should contain run ID"
     );
     // Check status
-    assert!(html.contains("Passed") || html.contains("passed"), "should contain status");
+    assert!(
+        html.contains("Passed") || html.contains("passed"),
+        "should contain status"
+    );
 }
 
 #[test]
@@ -245,7 +248,7 @@ fn trace_renders_ansi_colors_as_css() {
             }
         ]]
     }"#;
-    fs::write(snapshots_dir.join("0001.json"), snapshot_with_cells).expect("write snapshot");
+    fs::write(snapshots_dir.join("000001.json"), snapshot_with_cells).expect("write snapshot");
 
     let output_file = artifacts_dir.path().join("trace.html");
 
@@ -285,10 +288,7 @@ fn trace_fails_gracefully_on_missing_artifacts() {
         .output()
         .expect("failed to execute");
 
-    assert!(
-        !output.status.success(),
-        "should fail on missing artifacts"
-    );
+    assert!(!output.status.success(), "should fail on missing artifacts");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -333,6 +333,12 @@ fn trace_help_shows_options() {
         .expect("failed to execute");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--artifacts"), "should show --artifacts option");
-    assert!(stdout.contains("--output") || stdout.contains("-o"), "should show --output option");
+    assert!(
+        stdout.contains("--artifacts"),
+        "should show --artifacts option"
+    );
+    assert!(
+        stdout.contains("--output") || stdout.contains("-o"),
+        "should show --output option"
+    );
 }

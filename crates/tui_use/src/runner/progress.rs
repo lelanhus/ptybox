@@ -86,7 +86,9 @@ impl CollectingProgress {
 
     /// Get collected events.
     pub fn events(&self) -> Vec<ProgressEvent> {
-        self.events.lock().map_or_else(|_| Vec::new(), |g| g.clone())
+        self.events
+            .lock()
+            .map_or_else(|_| Vec::new(), |g| g.clone())
     }
 }
 

@@ -360,11 +360,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         Span::styled("Unknown", Style::default().fg(Color::DarkGray))
     };
 
-    let step_info = format!(
-        "Step {}/{}",
-        app.current_step + 1,
-        app.steps.len()
-    );
+    let step_info = format!("Step {}/{}", app.current_step + 1, app.steps.len());
 
     let content = Line::from(vec![
         Span::raw(" "),

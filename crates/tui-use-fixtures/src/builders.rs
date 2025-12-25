@@ -24,8 +24,8 @@
 use std::path::Path;
 
 use tui_use::model::policy::{
-    ArtifactsPolicy, Budgets, EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy,
-    ReplayPolicy, SandboxMode, POLICY_VERSION,
+    ArtifactsPolicy, Budgets, EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy, ReplayPolicy,
+    SandboxMode, POLICY_VERSION,
 };
 use tui_use::model::scenario::PolicyRef;
 use tui_use::model::{
@@ -449,7 +449,8 @@ impl ScenarioBuilder {
     /// Add a wait-for-text step.
     #[must_use]
     pub fn add_wait_for_text(mut self, name: &str, text: &str) -> Self {
-        self.steps.push(StepBuilder::wait_for_text(name, text).build());
+        self.steps
+            .push(StepBuilder::wait_for_text(name, text).build());
         self
     }
 

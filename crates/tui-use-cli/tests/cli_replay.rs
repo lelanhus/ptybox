@@ -213,13 +213,13 @@ fn replay_detects_snapshot_mismatch() {
         .unwrap();
     assert!(run_output.status.success());
 
-    let snapshot_path = artifacts_dir.join("snapshots/0001.json");
+    let snapshot_path = artifacts_dir.join("snapshots/000001.json");
     let mut snapshot =
         serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&snapshot_path).unwrap())
             .unwrap();
     snapshot["lines"][0] = serde_json::Value::String("corrupt".to_string());
     fs::write(snapshot_path, serde_json::to_vec_pretty(&snapshot).unwrap()).unwrap();
-    update_checksum(&artifacts_dir, "snapshots/0001.json");
+    update_checksum(&artifacts_dir, "snapshots/000001.json");
 
     let replay_output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
         .args([
@@ -675,13 +675,13 @@ fn replay_writes_summary_on_mismatch() {
         .unwrap();
     assert!(run_output.status.success());
 
-    let snapshot_path = artifacts_dir.join("snapshots/0001.json");
+    let snapshot_path = artifacts_dir.join("snapshots/000001.json");
     let mut snapshot =
         serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&snapshot_path).unwrap())
             .unwrap();
     snapshot["lines"][0] = serde_json::Value::String("corrupt".to_string());
     fs::write(snapshot_path, serde_json::to_vec_pretty(&snapshot).unwrap()).unwrap();
-    update_checksum(&artifacts_dir, "snapshots/0001.json");
+    update_checksum(&artifacts_dir, "snapshots/000001.json");
 
     let replay_output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
         .args([

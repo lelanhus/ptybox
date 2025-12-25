@@ -144,7 +144,9 @@ const RUN = {run_json};
         run_id = run_result.run_id,
         status = run_result.status,
         status_class = status_class,
-        duration_ms = run_result.ended_at_ms.saturating_sub(run_result.started_at_ms),
+        duration_ms = run_result
+            .ended_at_ms
+            .saturating_sub(run_result.started_at_ms),
         transcript_escaped = transcript_escaped,
         steps_json = steps_json,
         snapshots_json = snapshots_json,

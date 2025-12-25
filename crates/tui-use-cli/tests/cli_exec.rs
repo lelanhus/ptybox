@@ -163,7 +163,7 @@ fn exec_nonzero_exit_returns_exit_code() {
     let run: RunResult = serde_json::from_slice(&output.stdout).unwrap();
     assert!(matches!(run.status, tui_use::model::RunStatus::Failed));
     let err = run.error.expect("run should include error");
-    assert_eq!(err.code, "E_PROCESS_EXITED");
+    assert_eq!(err.code, "E_PROCESS_EXIT");
 }
 
 #[test]

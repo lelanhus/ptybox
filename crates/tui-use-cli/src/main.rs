@@ -180,7 +180,11 @@ enum Commands {
     Trace {
         #[arg(long, help = "Path to artifacts directory")]
         artifacts: PathBuf,
-        #[arg(long, short = 'o', help = "Output HTML file path (default: trace.html)")]
+        #[arg(
+            long,
+            short = 'o',
+            help = "Output HTML file path (default: trace.html)"
+        )]
         output: Option<PathBuf>,
     },
 }
@@ -336,14 +340,19 @@ fn main() -> Result<()> {
             // TUI mode runs the scenario in an interactive terminal UI
             if tui {
                 if verbose || json {
-                    return emit_cli_error(json, "--tui cannot be combined with --verbose or --json");
+                    return emit_cli_error(
+                        json,
+                        "--tui cannot be combined with --verbose or --json",
+                    );
                 }
-                let artifacts_config = artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite });
+                let artifacts_config =
+                    artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite });
                 return tui_mode::run_tui(scenario, artifacts_config);
             }
 
             let progress_callback = if verbose {
-                Some(Arc::new(progress::VerboseProgress::new()) as Arc<dyn tui_use::runner::ProgressCallback>)
+                Some(Arc::new(progress::VerboseProgress::new())
+                    as Arc<dyn tui_use::runner::ProgressCallback>)
             } else {
                 None
             };
@@ -504,7 +513,7 @@ fn emit_result(json: bool, result: Result<tui_use::model::RunResult, RunnerError
 
 fn split_command(mut command: Vec<String>) -> Result<(String, Vec<String>), RunnerError> {
     if command.is_empty() {
-        return Err(RunnerError::protocol("E_PROTOCOL", "missing command"));
+        return Err(RunnerError::protocol("E_PROTOCOL", "missing command", None));
     }
     let cmd = command.remove(0);
     Ok((cmd, command))
@@ -680,7 +689,7 @@ fn exit_code_for_error_code(code: &str) -> i32 {
         "E_SANDBOX_UNAVAILABLE" => 3,
         "E_TIMEOUT" => 4,
         "E_ASSERTION_FAILED" => 5,
-        "E_PROCESS_EXITED" => 6,
+        "E_PROCESS_EXIT" => 6,
         "E_TERMINAL_PARSE" => 7,
         "E_PROTOCOL_VERSION_MISMATCH" => 8,
         "E_PROTOCOL" => 9,
@@ -694,7 +703,7 @@ fn exit_code_for_error_code(code: &str) -> i32 {
 fn emit_cli_error(json: bool, message: &str) -> Result<()> {
     emit_result(
         json,
-        Err(RunnerError::protocol("E_CLI_INVALID_ARG", message)),
+        Err(RunnerError::protocol("E_CLI_INVALID_ARG", message, None)),
     )
 }
 

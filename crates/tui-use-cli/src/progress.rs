@@ -106,10 +106,7 @@ impl ProgressCallback for VerboseProgress {
                 } else {
                     "\x1b[31mfailed\x1b[0m"
                 };
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "run {status_msg}: {duration_ms}ms total"
-                );
+                let _ = writeln!(std::io::stderr(), "run {status_msg}: {duration_ms}ms total");
             }
         }
     }

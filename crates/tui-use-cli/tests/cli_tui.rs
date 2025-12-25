@@ -86,10 +86,7 @@ fn run_tui_rejects_json_combination() {
         .output()
         .expect("failed to execute");
 
-    assert!(
-        !output.status.success(),
-        "run --tui --json should fail"
-    );
+    assert!(!output.status.success(), "run --tui --json should fail");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -148,10 +145,7 @@ fn run_tui_rejects_verbose_combination() {
         .output()
         .expect("failed to execute");
 
-    assert!(
-        !output.status.success(),
-        "run --tui --verbose should fail"
-    );
+    assert!(!output.status.success(), "run --tui --verbose should fail");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);

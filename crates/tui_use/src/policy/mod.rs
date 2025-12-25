@@ -23,20 +23,22 @@ const DANGEROUS_ENV_VARS: &[&str] = &[
     "PERL5LIB",
     "CLASSPATH",
     "IFS",
+    "GMON_OUT_PREFIX", // Profiling output directory
+    "MALLOC_CONF",     // Memory allocator configuration
 ];
 
 /// Well-known system paths that are symlinks by design.
 /// These are allowed because they are controlled by the OS and cannot be manipulated by users.
 const ALLOWED_SYSTEM_SYMLINKS: &[&str] = &[
-    "/tmp",        // -> /private/tmp on macOS
-    "/var",        // -> /private/var on macOS
-    "/etc",        // -> /private/etc on macOS
-    "/home",       // May be a symlink on some systems
-    "/usr/bin",    // Standard system path
-    "/usr/lib",    // Standard system path
-    "/bin",        // May be symlink to /usr/bin on some systems
-    "/lib",        // May be symlink to /usr/lib on some systems
-    "/sbin",       // May be symlink to /usr/sbin on some systems
+    "/tmp",     // -> /private/tmp on macOS
+    "/var",     // -> /private/var on macOS
+    "/etc",     // -> /private/etc on macOS
+    "/home",    // May be a symlink on some systems
+    "/usr/bin", // Standard system path
+    "/usr/lib", // Standard system path
+    "/bin",     // May be symlink to /usr/bin on some systems
+    "/lib",     // May be symlink to /usr/lib on some systems
+    "/sbin",    // May be symlink to /usr/sbin on some systems
 ];
 
 /// Validates that a path is not a user-created symlink.
@@ -243,7 +245,7 @@ pub fn explain_policy_for_run_config(policy: &Policy, run: &RunConfig) -> Policy
 
 pub fn validate_policy_version(policy: &Policy) -> Result<(), RunnerError> {
     if policy.policy_version != POLICY_VERSION {
-        return Err(RunnerError::protocol_with_context(
+        return Err(RunnerError::protocol(
             "E_PROTOCOL",
             format!(
                 "unsupported policy_version {}, expected {}",

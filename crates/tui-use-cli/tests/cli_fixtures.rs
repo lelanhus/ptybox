@@ -196,8 +196,13 @@ fn unicode_fixture_produces_valid_snapshot() {
     );
 
     // Final observation should contain screen content
-    let final_obs = result.final_observation.expect("should have final observation");
-    assert!(!final_obs.screen.lines.is_empty(), "should have screen content");
+    let final_obs = result
+        .final_observation
+        .expect("should have final observation");
+    assert!(
+        !final_obs.screen.lines.is_empty(),
+        "should have screen content"
+    );
 }
 
 #[test]
@@ -383,7 +388,11 @@ fn exit_code_fixture_returns_specified_code() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let result: RunResult = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(result.status, RunStatus::Failed, "non-zero exit should fail");
+    assert_eq!(
+        result.status,
+        RunStatus::Failed,
+        "non-zero exit should fail"
+    );
     let exit_status = result.exit_status.expect("should have exit status");
     assert!(!exit_status.success, "non-zero exit should be !success");
     assert_eq!(exit_status.exit_code, Some(42));
@@ -513,7 +522,9 @@ fn delay_output_fixture_wait_condition() {
     assert_eq!(result.status, RunStatus::Passed, "run should pass");
 
     // Verify the delayed message appeared in the final observation
-    let final_obs = result.final_observation.expect("should have final observation");
+    let final_obs = result
+        .final_observation
+        .expect("should have final observation");
     let screen_text = final_obs.screen.lines.join("\n");
     assert!(
         screen_text.contains("DELAYED_MESSAGE"),
@@ -823,22 +834,20 @@ fn scenario_assertion_failure_returns_correct_exit_code() {
             initial_size: TerminalSize::default(),
             policy: tui_use::model::scenario::PolicyRef::Inline(policy),
         },
-        steps: vec![
-            Step {
-                id: StepId::new(),
-                name: "type".to_string(),
-                action: Action {
-                    action_type: ActionType::Text,
-                    payload: serde_json::json!({"text": "hello"}),
-                },
-                assert: vec![Assertion {
-                    assertion_type: "screen_contains".to_string(),
-                    payload: serde_json::json!({"text": "goodbye"}), // Will fail
-                }],
-                timeout_ms: 100,
-                retries: 0,
+        steps: vec![Step {
+            id: StepId::new(),
+            name: "type".to_string(),
+            action: Action {
+                action_type: ActionType::Text,
+                payload: serde_json::json!({"text": "hello"}),
             },
-        ],
+            assert: vec![Assertion {
+                assertion_type: "screen_contains".to_string(),
+                payload: serde_json::json!({"text": "goodbye"}), // Will fail
+            }],
+            timeout_ms: 100,
+            retries: 0,
+        }],
     };
 
     let scenario_path = dir.join("scenario.json");
@@ -957,10 +966,16 @@ fn scenario_resize_action() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let result: RunResult = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(result.status, RunStatus::Passed, "resize scenario should pass");
+    assert_eq!(
+        result.status,
+        RunStatus::Passed,
+        "resize scenario should pass"
+    );
 
     // Verify the final observation has the resized dimensions
-    let final_obs = result.final_observation.expect("should have final observation");
+    let final_obs = result
+        .final_observation
+        .expect("should have final observation");
     assert_eq!(final_obs.screen.rows, 40, "rows should be 40");
     assert_eq!(final_obs.screen.cols, 120, "cols should be 120");
 }

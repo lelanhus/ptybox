@@ -66,7 +66,10 @@ fn snapshot_without_cells_has_none() {
         .snapshot_with_cells(false)
         .expect("snapshot should succeed");
 
-    assert!(snapshot.cells.is_none(), "cells should be None when not requested");
+    assert!(
+        snapshot.cells.is_none(),
+        "cells should be None when not requested"
+    );
 }
 
 #[test]
@@ -278,12 +281,19 @@ fn snapshot_handles_cjk_wide_characters() {
     let row = &cells[0];
 
     // Both characters should have width 2
-    let cjk_cells: Vec<_> = row.iter().filter(|c| !c.ch.is_empty() && !c.ch.trim().is_empty()).collect();
+    let cjk_cells: Vec<_> = row
+        .iter()
+        .filter(|c| !c.ch.is_empty() && !c.ch.trim().is_empty())
+        .collect();
     assert!(!cjk_cells.is_empty(), "should have CJK cells");
 
     for cell in cjk_cells {
         if cell.ch == "漢" || cell.ch == "字" {
-            assert_eq!(cell.width, 2, "CJK character {} should have width 2", cell.ch);
+            assert_eq!(
+                cell.width, 2,
+                "CJK character {} should have width 2",
+                cell.ch
+            );
         }
     }
 }
@@ -299,8 +309,14 @@ fn snapshot_default_style_is_correct() {
     let cells = snapshot.cells.expect("cells should be present");
     let cell = &cells[0][0];
 
-    assert!(matches!(cell.style.fg, Color::Default), "default fg should be Default");
-    assert!(matches!(cell.style.bg, Color::Default), "default bg should be Default");
+    assert!(
+        matches!(cell.style.fg, Color::Default),
+        "default fg should be Default"
+    );
+    assert!(
+        matches!(cell.style.bg, Color::Default),
+        "default bg should be Default"
+    );
     assert!(!cell.style.bold, "default should not be bold");
     assert!(!cell.style.italic, "default should not be italic");
     assert!(!cell.style.underline, "default should not be underlined");
@@ -321,6 +337,12 @@ fn snapshot_combined_attributes() {
 
     assert!(cell.style.bold, "should be bold");
     assert!(cell.style.underline, "should be underlined");
-    assert!(matches!(cell.style.fg, Color::Ansi16(1)), "fg should be red");
-    assert!(matches!(cell.style.bg, Color::Ansi16(4)), "bg should be blue");
+    assert!(
+        matches!(cell.style.fg, Color::Ansi16(1)),
+        "fg should be red"
+    );
+    assert!(
+        matches!(cell.style.bg, Color::Ansi16(4)),
+        "bg should be blue"
+    );
 }

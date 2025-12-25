@@ -25,19 +25,23 @@ use std::time::{Duration, Instant};
 /// ```no_run
 /// use tui_use::session::{Session, SessionConfig};
 /// use tui_use::model::{RunId, TerminalSize};
+/// use tui_use::runner::RunnerError;
 /// use std::time::Duration;
 ///
-/// let config = SessionConfig {
-///     command: "/bin/cat".to_string(),
-///     args: vec![],
-///     cwd: None,
-///     size: TerminalSize::default(),
-///     run_id: RunId::new(),
-///     env: Default::default(),
-/// };
-/// let mut session = Session::spawn(config).unwrap();
-/// let observation = session.observe(Duration::from_millis(50)).unwrap();
-/// session.terminate().unwrap();
+/// fn example() -> Result<(), RunnerError> {
+///     let config = SessionConfig {
+///         command: "/bin/cat".to_string(),
+///         args: vec![],
+///         cwd: None,
+///         size: TerminalSize::default(),
+///         run_id: RunId::new(),
+///         env: Default::default(),
+///     };
+///     let mut session = Session::spawn(config)?;
+///     let observation = session.observe(Duration::from_millis(50))?;
+///     session.terminate()?;
+///     Ok(())
+/// }
 /// ```
 pub struct Session {
     run_id: RunId,
@@ -148,7 +152,7 @@ impl Session {
                     .get("key")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        RunnerError::protocol_with_context(
+                        RunnerError::protocol(
                             "E_PROTOCOL",
                             "missing or invalid 'key' field in key action payload",
                             serde_json::json!({
@@ -174,7 +178,7 @@ impl Session {
                     .get("text")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        RunnerError::protocol_with_context(
+                        RunnerError::protocol(
                             "E_PROTOCOL",
                             "missing or invalid 'text' field in text action payload",
                             serde_json::json!({
@@ -200,7 +204,7 @@ impl Session {
                     .get("rows")
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| {
-                        RunnerError::protocol_with_context(
+                        RunnerError::protocol(
                             "E_PROTOCOL",
                             "missing or invalid 'rows' field in resize action payload",
                             serde_json::json!({
@@ -216,7 +220,7 @@ impl Session {
                     .get("cols")
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| {
-                        RunnerError::protocol_with_context(
+                        RunnerError::protocol(
                             "E_PROTOCOL",
                             "missing or invalid 'cols' field in resize action payload",
                             serde_json::json!({
@@ -329,7 +333,7 @@ impl Session {
             match self.child.try_wait() {
                 Ok(Some(status)) => return Ok(Some(status)),
                 Ok(None) => {
-                    if Instant::now() > deadline {
+                    if Instant::now() >= deadline {
                         return Ok(None);
                     }
                     std::thread::sleep(Duration::from_millis(10));
@@ -446,7 +450,7 @@ fn key_to_bytes(key: &str) -> Result<Vec<u8>, RunnerError> {
             if key.len() == 1 {
                 return Ok(key.as_bytes().to_vec());
             }
-            return Err(RunnerError::protocol_with_context(
+            return Err(RunnerError::protocol(
                 "E_PROTOCOL",
                 format!("unsupported key '{key}'"),
                 serde_json::json!({

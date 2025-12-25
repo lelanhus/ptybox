@@ -92,7 +92,9 @@ pub fn evaluate(
                     let message = if passed {
                         None
                     } else {
-                        Some(format!("line {line_num} was '{actual}', expected '{expected}'"))
+                        Some(format!(
+                            "line {line_num} was '{actual}', expected '{expected}'"
+                        ))
                     };
                     (passed, message, None)
                 }

@@ -75,15 +75,7 @@ impl RunnerError {
     }
 
     /// Create a protocol error (invalid JSON or version mismatch).
-    pub fn protocol(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            context: None,
-        }
-    }
-
-    pub fn protocol_with_context(
+    pub fn protocol(
         code: impl Into<String>,
         message: impl Into<String>,
         context: impl Into<Option<Value>>,
@@ -596,9 +588,8 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                 .or_else(|| policy.fs.working_dir.clone())
                 .unwrap_or_else(|| {
                     std::env::current_dir()
-                        .unwrap_or_default()
-                        .display()
-                        .to_string()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "<unknown>".to_string())
                 }),
             policy,
             scenario: Some(scenario),
@@ -655,9 +646,8 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                     .or_else(|| policy.fs.working_dir.clone())
                     .unwrap_or_else(|| {
                         std::env::current_dir()
-                            .unwrap_or_default()
-                            .display()
-                            .to_string()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|_| "<unknown>".to_string())
                     }),
                 policy,
                 scenario: Some(scenario_clone),
@@ -820,7 +810,7 @@ pub fn run_exec_with_options(
 
         let error = if status == RunStatus::Failed {
             Some(crate::model::ErrorInfo {
-                code: "E_PROCESS_EXITED".to_string(),
+                code: "E_PROCESS_EXIT".to_string(),
                 message: "process exited unsuccessfully".to_string(),
                 context: None,
             })
@@ -839,9 +829,8 @@ pub fn run_exec_with_options(
             args: args.clone(),
             cwd: cwd.unwrap_or_else(|| {
                 std::env::current_dir()
-                    .unwrap_or_default()
-                    .display()
-                    .to_string()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "<unknown>".to_string())
             }),
             policy: policy.clone(),
             scenario: None,
@@ -878,9 +867,8 @@ pub fn run_exec_with_options(
                 args: args.clone(),
                 cwd: cwd.clone().unwrap_or_else(|| {
                     std::env::current_dir()
-                        .unwrap_or_default()
-                        .display()
-                        .to_string()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "<unknown>".to_string())
                 }),
                 policy: policy.clone(),
                 scenario: None,
@@ -962,7 +950,7 @@ fn wait_for_condition(
 ) -> RunnerResult<crate::model::Observation> {
     let wait_payload: WaitPayload = serde_json::from_value(action.payload.clone())
         .map_err(|e| {
-            RunnerError::protocol_with_context(
+            RunnerError::protocol(
                 "E_PROTOCOL",
                 "invalid wait action payload",
                 serde_json::json!({
@@ -1001,7 +989,7 @@ fn wait_for_condition(
             .unwrap_or("");
         Some(
             regex::Regex::new(pattern)
-                .map_err(|_| RunnerError::protocol("E_PROTOCOL", "invalid regex"))?,
+                .map_err(|_| RunnerError::protocol("E_PROTOCOL", "invalid regex", None))?,
         )
     } else {
         None
@@ -1101,7 +1089,7 @@ fn condition_satisfied(
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let re = regex::Regex::new(pattern)
-                    .map_err(|_| RunnerError::protocol("E_PROTOCOL", "invalid regex"))?;
+                    .map_err(|_| RunnerError::protocol("E_PROTOCOL", "invalid regex", None))?;
                 Ok(re.is_match(&screen_text))
             }
         }
@@ -1125,6 +1113,7 @@ fn condition_satisfied(
         other => Err(RunnerError::protocol(
             "E_PROTOCOL",
             format!("unsupported wait condition '{other}'"),
+            None,
         )),
     }
 }

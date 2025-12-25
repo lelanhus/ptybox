@@ -365,7 +365,7 @@ fn run_scenario_supports_resize_action() {
     let run: RunResult = serde_json::from_slice(&output.stdout).unwrap();
     assert!(matches!(run.status, tui_use::model::RunStatus::Passed));
     let snapshot: tui_use::model::ScreenSnapshot = serde_json::from_str(
-        &fs::read_to_string(artifacts_dir.join("snapshots/0001.json")).unwrap(),
+        &fs::read_to_string(artifacts_dir.join("snapshots/000001.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(snapshot.rows, 40);
@@ -598,12 +598,14 @@ fn run_scenario_is_deterministic_for_same_inputs() {
         .unwrap();
     assert!(output_b.status.success());
 
-    let snapshot_a: tui_use::model::ScreenSnapshot =
-        serde_json::from_str(&fs::read_to_string(artifacts_a.join("snapshots/0001.json")).unwrap())
-            .unwrap();
-    let snapshot_b: tui_use::model::ScreenSnapshot =
-        serde_json::from_str(&fs::read_to_string(artifacts_b.join("snapshots/0001.json")).unwrap())
-            .unwrap();
+    let snapshot_a: tui_use::model::ScreenSnapshot = serde_json::from_str(
+        &fs::read_to_string(artifacts_a.join("snapshots/000001.json")).unwrap(),
+    )
+    .unwrap();
+    let snapshot_b: tui_use::model::ScreenSnapshot = serde_json::from_str(
+        &fs::read_to_string(artifacts_b.join("snapshots/000001.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(snapshot_a.lines, snapshot_b.lines);
     assert_eq!(snapshot_a.cursor.row, snapshot_b.cursor.row);
     assert_eq!(snapshot_a.cursor.col, snapshot_b.cursor.col);
@@ -946,7 +948,7 @@ fn artifacts_layout_is_written() {
     assert!(artifacts_dir.join("policy.json").exists());
     assert!(artifacts_dir.join("scenario.json").exists());
     assert!(artifacts_dir.join("transcript.log").exists());
-    assert!(artifacts_dir.join("snapshots/0001.json").exists());
+    assert!(artifacts_dir.join("snapshots/000001.json").exists());
     assert!(artifacts_dir.join("events.jsonl").exists());
     assert!(artifacts_dir.join("normalization.json").exists());
     assert!(artifacts_dir.join("checksums.json").exists());

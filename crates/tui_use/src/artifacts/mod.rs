@@ -67,7 +67,7 @@ impl ArtifactsWriter {
 
     pub fn write_snapshot(&mut self, snapshot: &ScreenSnapshot) -> RunnerResult<()> {
         self.snapshot_count += 1;
-        let name = format!("snapshots/{:04}.json", self.snapshot_count);
+        let name = format!("snapshots/{:06}.json", self.snapshot_count);
         self.write_json(&name, snapshot)
     }
 
@@ -75,6 +75,9 @@ impl ArtifactsWriter {
         self.transcript
             .write_all(delta.as_bytes())
             .map_err(|err| RunnerError::io("E_IO", "failed to write transcript", err))?;
+        self.transcript
+            .flush()
+            .map_err(|err| RunnerError::io("E_IO", "failed to flush transcript", err))?;
         self.record_checksum("transcript.log")?;
         Ok(())
     }
@@ -91,6 +94,9 @@ impl ArtifactsWriter {
         self.events
             .write_all(b"\n")
             .map_err(|err| RunnerError::io("E_IO", "failed to write events log", err))?;
+        self.events
+            .flush()
+            .map_err(|err| RunnerError::io("E_IO", "failed to flush events log", err))?;
         self.record_checksum("events.jsonl")?;
         Ok(())
     }
