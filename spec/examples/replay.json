@@ -1,0 +1,9 @@
+{
+  "replay_version": 1,
+  "status": "failed",
+  "source": "cli",
+  "strict": false,
+  "filters": ["snapshot_id"],
+  "rules": [],
+  "mismatch": { "kind": "snapshot", "index": 0 }
+}

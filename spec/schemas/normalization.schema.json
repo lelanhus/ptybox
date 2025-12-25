@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "normalization.schema.json",
+  "type": "object",
+  "required": ["normalization_version", "filters", "strict", "source"],
+  "properties": {
+    "normalization_version": { "type": "integer" },
+    "filters": { "type": "array", "items": { "type": "string" } },
+    "strict": { "type": "boolean" },
+    "source": { "type": "string", "enum": ["default", "policy", "cli", "none"] },
+    "rules": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "required": ["target", "pattern", "replace"],
+        "properties": {
+          "target": { "type": "string", "enum": ["transcript", "snapshot_lines"] },
+          "pattern": { "type": "string" },
+          "replace": { "type": "string" }
+        }
+      }
+    }
+  }
+}

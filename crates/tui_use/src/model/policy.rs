@@ -1,29 +1,48 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::model::NormalizationFilter;
+
+pub const POLICY_VERSION: u32 = 3;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Policy {
     pub policy_version: u32,
     pub sandbox: SandboxMode,
+    #[serde(default)]
+    pub sandbox_unsafe_ack: bool,
     pub network: NetworkPolicy,
+    #[serde(default)]
+    pub network_unsafe_ack: bool,
     pub fs: FsPolicy,
+    #[serde(default)]
+    pub fs_write_unsafe_ack: bool,
+    #[serde(default)]
+    pub fs_strict_write: bool,
     pub exec: ExecPolicy,
     pub env: EnvPolicy,
     pub budgets: Budgets,
     pub artifacts: ArtifactsPolicy,
+    #[serde(default)]
+    pub replay: ReplayPolicy,
 }
 
 impl Default for Policy {
     fn default() -> Self {
         Self {
-            policy_version: 1,
+            policy_version: POLICY_VERSION,
             sandbox: SandboxMode::Seatbelt,
+            sandbox_unsafe_ack: false,
             network: NetworkPolicy::Disabled,
+            network_unsafe_ack: false,
             fs: FsPolicy::default(),
+            fs_write_unsafe_ack: false,
+            fs_strict_write: false,
             exec: ExecPolicy::default(),
             env: EnvPolicy::default(),
             budgets: Budgets::default(),
             artifacts: ArtifactsPolicy::default(),
+            replay: ReplayPolicy::default(),
         }
     }
 }
@@ -88,4 +107,14 @@ pub struct ArtifactsPolicy {
     pub enabled: bool,
     pub dir: Option<String>,
     pub overwrite: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ReplayPolicy {
+    #[serde(default)]
+    pub strict: bool,
+    #[serde(default)]
+    pub normalization_filters: Option<Vec<NormalizationFilter>>,
+    #[serde(default)]
+    pub normalization_rules: Option<Vec<crate::model::NormalizationRule>>,
 }

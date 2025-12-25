@@ -64,14 +64,25 @@
       - Deny-by-default Policy model (exec/fs/env/network/budgets)
       - Sandbox enabled by default; never silently downgrade if unavailable
       - Clear unsafe-mode escape hatch that is explicit, loud, and logged
+      - Explicit acknowledgement required for network enablement and any write allowlist
+      - Unsandboxed runs require explicit acknowledgement that network policy cannot be enforced
+      - Filesystem allowlists and working_dir must be absolute paths
+      - Extra-strict write mode can be enabled per-run via CLI (`--strict-write`) and requires `--ack-unsafe-write`
+      - RunConfig `cwd` must be an absolute path
+      - Exec allowlist paths must be absolute
       - Artifacts + audit logs for every run
       - Linux container runs require explicit external-sandbox opt-in and must record that choice
-      - Policy guidance avoids broad allowlists (e.g., `/` or home directories) and favors minimal, scoped paths
+      - Policy validation rejects broad allowlists (e.g., `/`, the current home directory, or system roots like `/System` and `/Users`) and favors minimal, scoped paths
+      - Invalid terminal output (e.g. invalid UTF-8) fails with `E_TERMINAL_PARSE` and preserves artifacts
     </guardrails>
 
     <artifacts_and_replay>
       - Store transcript, snapshots, effective policy, and resolved scenario in a predictable directory layout
-      - Replay runs for deterministic regression testing and debugging
+      - Replay runs compare snapshots, transcript, and normalized run results for determinism
+      - Replay writes normalization.json and supports a strict mode that disables normalization
+      - Replay normalization defaults are configurable via policy and can be overridden by CLI flags
+      - Artifacts include checksums.json for integrity; replay writes replay.json and diff.json on mismatch
+      - Replay normalization rules can redact nondeterministic transcript/snapshot content (regex, opt-in)
     </artifacts_and_replay>
   </core_features>
 
@@ -84,7 +95,13 @@
 
     <cli_protocol>
       - Non-interactive JSON mode for run/exec commands (parseable by scripts/LLM tools)
+      - JSON mode always prints RunResult/ErrorInfo to stdout but exits non-zero when RunResult is Failed
       - Optional interactive NDJSON over stdio for step-by-step driving
+      - Driver input messages are versioned and reject protocol mismatches
+      - Replay supports `--strict` to disable normalization and `--normalize <filter|all|none>` to select filters
+      - Replay supports `--require-events` and `--require-checksums` to enforce artifact presence
+      - Replay supports `--explain` to report resolved normalization settings (policy + CLI)
+      - Replay report command reads the latest replay summary/diff for CI-friendly output
     </cli_protocol>
   </api_surface_summary>
 

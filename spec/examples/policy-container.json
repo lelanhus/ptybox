@@ -1,0 +1,40 @@
+{
+  "policy_version": 3,
+  "sandbox": "none",
+  "sandbox_unsafe_ack": true,
+  "network": "disabled",
+  "network_unsafe_ack": true,
+  "fs_write_unsafe_ack": true,
+  "fs_strict_write": false,
+  "fs": {
+    "allowed_read": ["/work"],
+    "allowed_write": ["/work/artifacts-container"],
+    "working_dir": "/work"
+  },
+  "exec": {
+    "allowed_executables": ["/bin/echo"],
+    "allow_shell": false
+  },
+  "env": {
+    "allowlist": [],
+    "set": {},
+    "inherit": false
+  },
+  "budgets": {
+    "max_runtime_ms": 60000,
+    "max_steps": 10000,
+    "max_output_bytes": 8388608,
+    "max_snapshot_bytes": 2097152,
+    "max_wait_ms": 10000
+  },
+  "artifacts": {
+    "enabled": true,
+    "dir": "/work/artifacts-container",
+    "overwrite": true
+  },
+  "replay": {
+    "strict": false,
+    "normalization_filters": ["snapshot_id"],
+    "normalization_rules": []
+  }
+}

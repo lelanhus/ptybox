@@ -1,0 +1,29 @@
+{
+  "scenario_version": 1,
+  "metadata": {
+    "name": "audio-extractor-help",
+    "description": "Test audio-extractor --help output"
+  },
+  "run": {
+    "command": "/tmp/audio-extractor",
+    "args": ["--help"],
+    "cwd": "/tmp",
+    "initial_size": {"rows": 24, "cols": 80},
+    "policy": {"path": "/Users/lelandhusband/Developer/Projects/tui-use/spec/examples/audio-extractor-policy.json"}
+  },
+  "steps": [
+    {
+      "id": "wait-for-output",
+      "name": "Wait for help text",
+      "action": {
+        "type": "wait",
+        "payload": {"timeout_ms": 2000}
+      },
+      "assert": [
+        {"type": "screen_contains", "payload": {"text": "audio-extractor"}}
+      ],
+      "timeout_ms": 5000,
+      "retries": 2
+    }
+  ]
+}

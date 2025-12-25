@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "policy.schema.json",
+  "type": "object",
+  "required": [
+    "policy_version",
+    "sandbox",
+    "network",
+    "fs",
+    "exec",
+    "env",
+    "budgets",
+    "artifacts",
+    "replay"
+  ],
+  "properties": {
+    "policy_version": { "type": "integer" },
+    "sandbox": { "type": "string", "enum": ["seatbelt", "none"] },
+    "sandbox_unsafe_ack": { "type": "boolean" },
+    "network": { "type": "string", "enum": ["disabled", "enabled"] },
+    "network_unsafe_ack": { "type": "boolean" },
+    "fs_write_unsafe_ack": { "type": "boolean" },
+    "fs_strict_write": { "type": "boolean" },
+    "fs": {
+      "type": "object",
+      "properties": {
+        "allowed_read": { "type": "array", "items": { "type": "string" } },
+        "allowed_write": { "type": "array", "items": { "type": "string" } },
+        "working_dir": { "type": ["string", "null"] }
+      },
+      "required": ["allowed_read", "allowed_write"]
+    },
+    "exec": {
+      "type": "object",
+      "properties": {
+        "allowed_executables": { "type": "array", "items": { "type": "string" } },
+        "allow_shell": { "type": "boolean" }
+      },
+      "required": ["allowed_executables", "allow_shell"]
+    },
+    "env": {
+      "type": "object",
+      "properties": {
+        "allowlist": { "type": "array", "items": { "type": "string" } },
+        "set": { "type": "object" },
+        "inherit": { "type": "boolean" }
+      },
+      "required": ["allowlist", "set", "inherit"]
+    },
+    "budgets": {
+      "type": "object",
+      "properties": {
+        "max_runtime_ms": { "type": "integer" },
+        "max_steps": { "type": "integer" },
+        "max_output_bytes": { "type": "integer" },
+        "max_snapshot_bytes": { "type": "integer" },
+        "max_wait_ms": { "type": "integer" }
+      },
+      "required": [
+        "max_runtime_ms",
+        "max_steps",
+        "max_output_bytes",
+        "max_snapshot_bytes",
+        "max_wait_ms"
+      ]
+    },
+    "artifacts": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "dir": { "type": ["string", "null"] },
+        "overwrite": { "type": "boolean" }
+      },
+      "required": ["enabled", "overwrite"]
+    },
+    "replay": {
+      "type": "object",
+      "properties": {
+        "strict": { "type": "boolean" },
+        "normalization_filters": {
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        },
+        "normalization_rules": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "required": ["target", "pattern", "replace"],
+            "properties": {
+              "target": { "type": "string", "enum": ["transcript", "snapshot_lines"] },
+              "pattern": { "type": "string" },
+              "replace": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["strict"]
+    }
+  }
+}

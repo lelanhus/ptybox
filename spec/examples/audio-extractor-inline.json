@@ -1,0 +1,73 @@
+{
+  "scenario_version": 1,
+  "metadata": {
+    "name": "audio-extractor-help",
+    "description": "Test audio-extractor --help output"
+  },
+  "run": {
+    "command": "/tmp/audio-extractor",
+    "args": ["--help"],
+    "cwd": "/tmp",
+    "initial_size": {"rows": 24, "cols": 80},
+    "policy": {
+      "policy_version": 3,
+      "sandbox": "none",
+      "sandbox_unsafe_ack": true,
+      "network": "disabled",
+      "network_unsafe_ack": true,
+      "fs": {
+        "allowed_read": ["/tmp"],
+        "allowed_write": ["/tmp"],
+        "working_dir": "/tmp"
+      },
+      "fs_write_unsafe_ack": true,
+      "fs_strict_write": false,
+      "exec": {
+        "allowed_executables": ["/tmp/audio-extractor"],
+        "allow_shell": false
+      },
+      "env": {
+        "allowlist": ["PATH", "HOME", "USER", "TERM", "NO_COLOR"],
+        "set": {"NO_COLOR": "1"},
+        "inherit": true
+      },
+      "budgets": {
+        "max_runtime_ms": 30000,
+        "max_steps": 100,
+        "max_output_bytes": 8388608,
+        "max_snapshot_bytes": 2097152,
+        "max_wait_ms": 10000
+      },
+      "artifacts": {
+        "enabled": false,
+        "dir": null,
+        "overwrite": false
+      },
+      "replay": {
+        "strict": false,
+        "normalization_filters": null,
+        "normalization_rules": null
+      }
+    }
+  },
+  "steps": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "name": "Wait for process to exit",
+      "action": {
+        "type": "wait",
+        "payload": {
+          "condition": {
+            "type": "process_exited",
+            "payload": {}
+          }
+        }
+      },
+      "assert": [
+        {"type": "screen_contains", "payload": {"text": "audio-extractor"}}
+      ],
+      "timeout_ms": 5000,
+      "retries": 2
+    }
+  ]
+}

@@ -118,6 +118,7 @@ pub fn replay_artifacts(artifacts_dir: &Path, options: ReplayOptions) -> RunnerR
             dir: replay_dir.clone(),
             overwrite: true,
         }),
+        progress: None,
     };
     let run_result = run_scenario(scenario, runner_options)?;
 

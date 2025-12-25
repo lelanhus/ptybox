@@ -47,7 +47,11 @@ impl EffectivePolicy {
             return Err(RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "no executables are allowed by policy",
-                serde_json::json!({"requested": run.command}),
+                serde_json::json!({
+                    "requested": run.command,
+                    "fix": "Add the executable path to policy.exec.allowed_executables",
+                    "example": {"exec": {"allowed_executables": [run.command.clone()]}}
+                }),
             ));
         }
 
@@ -55,7 +59,11 @@ impl EffectivePolicy {
             return Err(RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "command must be an absolute path",
-                serde_json::json!({"requested": run.command}),
+                serde_json::json!({
+                    "requested": run.command,
+                    "fix": "Provide the full path to the executable",
+                    "example": format!("/usr/bin/{}", run.command)
+                }),
             ));
         }
 
@@ -73,7 +81,11 @@ impl EffectivePolicy {
             return Err(RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "executable is not allowlisted",
-                serde_json::json!({"requested": run.command}),
+                serde_json::json!({
+                    "requested": run.command,
+                    "allowed_executables": exec.allowed_executables,
+                    "fix": "Add the executable path to policy.exec.allowed_executables"
+                }),
             ));
         }
 
@@ -81,7 +93,13 @@ impl EffectivePolicy {
             return Err(RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "shell execution is disabled by policy",
-                serde_json::json!({"requested": run.command, "args": run.args}),
+                serde_json::json!({
+                    "requested": run.command,
+                    "args": run.args,
+                    "reason": "Shell commands are blocked for security",
+                    "fix": "Set policy.exec.allow_shell to true (not recommended)",
+                    "alternative": "Use direct executable paths instead of shell wrappers"
+                }),
             ));
         }
 
@@ -170,12 +188,18 @@ pub fn explain_policy_for_run_config(policy: &Policy, run: &RunConfig) -> Policy
 
 pub fn validate_policy_version(policy: &Policy) -> Result<(), RunnerError> {
     if policy.policy_version != POLICY_VERSION {
-        return Err(RunnerError::protocol(
+        return Err(RunnerError::protocol_with_context(
             "E_PROTOCOL",
             format!(
                 "unsupported policy_version {}, expected {}",
                 policy.policy_version, POLICY_VERSION
             ),
+            serde_json::json!({
+                "received_version": policy.policy_version,
+                "expected_version": POLICY_VERSION,
+                "fix": format!("Set policy_version to {}", POLICY_VERSION),
+                "hint": "Run 'tui-use protocol-help --json' to see the current protocol versions"
+            }),
         ));
     }
     Ok(())
@@ -209,14 +233,22 @@ pub fn validate_network_policy(policy: &Policy) -> Result<(), RunnerError> {
         return Err(RunnerError::policy_denied(
             "E_POLICY_DENIED",
             "network enabled without explicit acknowledgement",
-            None,
+            serde_json::json!({
+                "network": "enabled",
+                "fix": "Set policy.network_unsafe_ack to true to acknowledge the security implications",
+                "note": "Network access allows the process to make external connections"
+            }),
         ));
     }
     if matches!(policy.sandbox, SandboxMode::None) && !policy.network_unsafe_ack {
         return Err(RunnerError::policy_denied(
             "E_POLICY_DENIED",
             "network policy cannot be enforced without sandbox",
-            serde_json::json!({"sandbox": "none"}),
+            serde_json::json!({
+                "sandbox": "none",
+                "fix": "Set policy.network_unsafe_ack to true to acknowledge that network restrictions cannot be enforced",
+                "alternative": "Use sandbox: 'seatbelt' (macOS) to enforce network restrictions"
+            }),
         ));
     }
     Ok(())
@@ -228,7 +260,12 @@ pub fn validate_artifacts_policy(policy: &Policy) -> Result<(), RunnerError> {
             RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "artifacts enabled without directory",
-                None,
+                serde_json::json!({
+                    "artifacts_enabled": true,
+                    "artifacts_dir": null,
+                    "fix": "Set policy.artifacts.dir to an absolute path within allowed_write paths",
+                    "example": {"artifacts": {"enabled": true, "dir": "/tmp/artifacts"}}
+                }),
             )
         })?;
         validate_artifacts_dir(Path::new(dir), &policy.fs)?;
@@ -282,7 +319,12 @@ pub fn validate_sandbox_mode(mode: &SandboxMode, unsafe_ack: bool) -> Result<(),
                 Err(RunnerError::policy_denied(
                     "E_POLICY_DENIED",
                     "sandbox disabled without explicit acknowledgement",
-                    None,
+                    serde_json::json!({
+                        "sandbox": "none",
+                        "fix": "Set policy.sandbox_unsafe_ack to true to acknowledge that no sandbox will be used",
+                        "note": "Without sandbox, filesystem and network policies cannot be enforced by the OS",
+                        "alternative": "Use sandbox: 'seatbelt' on macOS for OS-level enforcement"
+                    }),
                 ))
             }
         }
@@ -295,7 +337,11 @@ pub fn validate_env_policy(env: &EnvPolicy) -> Result<(), RunnerError> {
             return Err(RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "env var set without allowlist entry",
-                serde_json::json!({"var": key}),
+                serde_json::json!({
+                    "var": key,
+                    "current_allowlist": env.allowlist,
+                    "fix": format!("Add '{}' to policy.env.allowlist", key)
+                }),
             ));
         }
     }
@@ -329,7 +375,12 @@ pub fn apply_env_policy(
                 return Err(RunnerError::policy_denied(
                     "E_POLICY_DENIED",
                     "dangerous environment variable blocked",
-                    Some(serde_json::json!({"var": key})),
+                    Some(serde_json::json!({
+                        "var": key,
+                        "reason": "This variable could enable sandbox escape or library injection",
+                        "blocked_vars": DANGEROUS_ENV_VARS,
+                        "fix": format!("Remove '{}' from policy.env.allowlist", key)
+                    })),
                 ));
             }
             if let Ok(value) = std::env::var(key) {
@@ -347,7 +398,12 @@ pub fn apply_env_policy(
             return Err(RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "dangerous environment variable blocked",
-                Some(serde_json::json!({"var": key})),
+                Some(serde_json::json!({
+                    "var": key,
+                    "reason": "This variable could enable sandbox escape or library injection",
+                    "blocked_vars": DANGEROUS_ENV_VARS,
+                    "fix": format!("Remove '{}' from policy.env.set", key)
+                })),
             ));
         }
         if env_policy.allowlist.iter().any(|allowed| allowed == key) {
@@ -380,6 +436,9 @@ fn is_shell_command(command: &str, args: &[String]) -> bool {
     false
 }
 
+/// Blocked filesystem roots for security. Paths under these roots cannot be allowlisted.
+const BLOCKED_FS_ROOTS: &[&str] = &["/", "/System", "/Library", "/Users", "/private", "/Volumes"];
+
 pub fn validate_fs_policy(fs: &FsPolicy, fs_write_unsafe_ack: bool) -> Result<(), RunnerError> {
     let home_dir = std::env::var_os("HOME").map(PathBuf::from);
     let denied_roots: [(&Path, &str); 5] = [
@@ -393,7 +452,11 @@ pub fn validate_fs_policy(fs: &FsPolicy, fs_write_unsafe_ack: bool) -> Result<()
         return Err(RunnerError::policy_denied(
             "E_POLICY_DENIED",
             "write allowlist requires explicit acknowledgement",
-            serde_json::json!({"paths": fs.allowed_write}),
+            serde_json::json!({
+                "paths": fs.allowed_write,
+                "fix": "Set policy.fs_write_unsafe_ack to true to acknowledge write access",
+                "note": "Write access allows the process to modify files in allowlisted paths"
+            }),
         ));
     }
     for allowed in fs.allowed_read.iter().chain(fs.allowed_write.iter()) {
@@ -401,7 +464,11 @@ pub fn validate_fs_policy(fs: &FsPolicy, fs_write_unsafe_ack: bool) -> Result<()
             return Err(RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "allowlist paths must be absolute",
-                serde_json::json!({ "path": allowed }),
+                serde_json::json!({
+                    "path": allowed,
+                    "fix": "Use an absolute path starting with /",
+                    "example": format!("/tmp/{}", allowed)
+                }),
             ));
         }
         let allowed_path = canonicalize_for_policy(Path::new(allowed));
@@ -411,7 +478,17 @@ pub fn validate_fs_policy(fs: &FsPolicy, fs_write_unsafe_ack: bool) -> Result<()
             return Err(RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "disallowed allowlist path",
-                serde_json::json!({ "path": allowed, "reason": reason }),
+                serde_json::json!({
+                    "path": allowed,
+                    "reason": reason,
+                    "blocked_roots": BLOCKED_FS_ROOTS,
+                    "suggestion": "Use /tmp or another non-system path",
+                    "fix": "Copy files to /tmp and use /tmp paths instead",
+                    "example": {
+                        "allowed_read": ["/tmp"],
+                        "allowed_write": ["/tmp"]
+                    }
+                }),
             ));
         }
     }
@@ -440,7 +517,11 @@ pub fn validate_artifacts_dir(dir: &Path, fs: &FsPolicy) -> Result<(), RunnerErr
         return Err(RunnerError::policy_denied(
             "E_POLICY_DENIED",
             "artifacts dir must be an absolute path",
-            serde_json::json!({"dir": dir}),
+            serde_json::json!({
+                "dir": dir,
+                "fix": "Use an absolute path starting with /",
+                "example": "/tmp/artifacts"
+            }),
         ));
     }
     let dir = canonicalize_for_policy(dir);
@@ -448,7 +529,12 @@ pub fn validate_artifacts_dir(dir: &Path, fs: &FsPolicy) -> Result<(), RunnerErr
         return Err(RunnerError::policy_denied(
             "E_POLICY_DENIED",
             "artifacts dir is not within allowlisted write paths",
-            serde_json::json!({"dir": dir}),
+            serde_json::json!({
+                "dir": dir,
+                "allowed_write": fs.allowed_write,
+                "fix": "Add the artifacts directory to policy.fs.allowed_write",
+                "example": {"fs": {"allowed_write": [dir.to_string_lossy()]}}
+            }),
         ));
     }
     Ok(())

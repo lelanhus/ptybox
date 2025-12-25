@@ -1,0 +1,13 @@
+{
+  "normalization_version": 1,
+  "filters": ["snapshot_id", "run_id"],
+  "strict": false,
+  "source": "policy",
+  "rules": [
+    {
+      "target": "snapshot_lines",
+      "pattern": "\\\\d+",
+      "replace": "<n>"
+    }
+  ]
+}

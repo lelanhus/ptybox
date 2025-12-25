@@ -8,7 +8,7 @@ Build `tui-use`: a macOS-first, security-focused harness that lets automated age
 - **No surprises**: explicit configuration; stable defaults; deterministic, reproducible outputs; explicit “unsafe mode” opt-in.
 - **Typesafe**: library-first Rust API; strongly typed internal model; stable, versioned JSON/NDJSON protocol for external callers.
 - **Vertical slices**: feature-based modules where each slice owns its types, errors, tests, and docs.
-- **Least privilege**: documentation and examples avoid broad path allowlists (e.g., `/` or home directories).
+- **Least privilege**: policy validation rejects broad path allowlists (e.g., `/`, the current home directory, or system roots like `/System` and `/Users`).
 
 ## Deliverables (v1)
 - Rust crate: `tui_use` (programmatic API).
@@ -25,6 +25,19 @@ Build `tui-use`: a macOS-first, security-focused harness that lets automated age
   - strict `Policy` model (filesystem/network/env/exec allowlists)
   - macOS sandbox backend (Seatbelt via `sandbox-exec`) enabled by default
   - Linux container compatibility with explicit external-sandbox acknowledgment when no host backend exists
+  - explicit acknowledgements for network enablement, unsandboxed runs (network unenforceable), and any filesystem write allowlists
+  - optional extra-strict mode: any write access requires explicit acknowledgement
+  - filesystem allowlists and working_dir must use absolute paths
+  - CLI supports strict write mode and explicit write acknowledgements
+  - RunConfig cwd must be absolute
+  - CLI rejects relative cwd values early
+  - CLI preflight errors return structured error codes
+  - CLI rejects conflicting replay normalization flags with structured errors
+  - Sandbox profile generation reflects network policy
+  - Sandbox profile generation reflects filesystem allowlists
+  - Artifacts are written on run failures for debugging
+  - Driver mode enforces strict write mode and explicit acknowledgements
+  - Exec allowlist paths must be absolute
   - hard budgets (max runtime, max steps, max output bytes, etc.)
   - explicit `--no-sandbox` / “unsafe mode” gates (off by default)
 - Stable programmatic interface:
@@ -61,6 +74,14 @@ Build `tui-use`: a macOS-first, security-focused harness that lets automated age
 ### M4 — Recording, replay, and artifacts
 - Capture full transcript + snapshots, with an index for replay.
 - Replay runner for determinism/regression testing.
+- Record observation streams (`events.jsonl`) and replay normalization filters (`normalization.json`).
+- Add artifact integrity checks (`checksums.json`) and replay mismatch reporting (`replay.json`, `diff.json`).
+- Add replay flags to require events/checksums for stricter CI enforcement.
+
+### Operations / CI
+- Container usage guidance lives in `spec/ci.md`.
+- Release safety checklist lives in `spec/audit-checklist.md`.
+- Support normalization rules (regex) for nondeterministic transcript/snapshot output (opt-in).
 
 ### M5 — API stabilization and DX
 - Pin and version the JSON/NDJSON protocol; publish schemas.

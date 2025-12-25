@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "replay.schema.json",
+  "type": "object",
+  "required": ["replay_version", "status", "source", "strict", "filters", "rules"],
+  "properties": {
+    "replay_version": { "type": "integer" },
+    "status": { "type": "string", "enum": ["passed", "failed"] },
+    "source": { "type": "string", "enum": ["default", "policy", "cli", "none"] },
+    "strict": { "type": "boolean" },
+    "filters": { "type": "array", "items": { "type": "string" } },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target", "pattern", "replace"],
+        "properties": {
+          "target": { "type": "string", "enum": ["transcript", "snapshot_lines"] },
+          "pattern": { "type": "string" },
+          "replace": { "type": "string" }
+        }
+      }
+    },
+    "mismatch": {
+      "type": ["object", "null"],
+      "properties": {
+        "kind": { "type": "string" },
+        "index": { "type": ["integer", "null"] }
+      }
+    }
+  }
+}

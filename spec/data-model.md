@@ -61,35 +61,49 @@ Rules:
 - Backwards-incompatible changes must bump the relevant version(s) and be called out in `CHANGELOG.md`.
 - Every CLI JSON/NDJSON message must include `protocol_version`.
 
+Examples:
+- `spec/examples/policy.json`
+- `spec/examples/normalization.json`
+- `spec/examples/replay.json`
+
 ### Policy
 `Policy` is deny-by-default and must be explicit about any privilege.
 
-- `policy_version: u32`
+ - `policy_version: u32` (current: 3)
 - `sandbox: SandboxMode`
+- `sandbox_unsafe_ack: bool` (default false; must be true when `sandbox: none`)
 - `network: NetworkPolicy`
+- `network_unsafe_ack: bool` (default false; must be true when `network: enabled`; also required when `sandbox: none` because network policy cannot be enforced without a sandbox)
 - `fs: FsPolicy`
+- `fs_write_unsafe_ack: bool` (default false; must be true when `fs.allowed_write` is non-empty)
+- `fs_strict_write: bool` (default false; when true, any write access requires `fs_write_unsafe_ack: true` even if `fs.allowed_write` is empty)
 - `exec: ExecPolicy`
 - `env: EnvPolicy`
 - `budgets: Budgets`
 - `artifacts: ArtifactsPolicy`
+- `replay: ReplayPolicy`
 
 #### SandboxMode
 - `seatbelt`: default; use a Seatbelt profile (e.g. `sandbox-exec`) to restrict the child
-- `none`: only allowed with explicit opt-in; must be logged prominently
+- `none`: only allowed when `sandbox_unsafe_ack: true`; must be logged prominently
 
 #### NetworkPolicy
 - `disabled`: default
 - `enabled`: explicit opt-in (still subject to sandbox enforcement capability)
 
-#### FsPolicy
-- `allowed_read: [Path]` (allowlist; empty means “deny all reads except system baseline required by the host OS + runtime”)
-- `allowed_write: [Path]` (allowlist; default should be an artifacts dir + an internal temp dir)
-- `working_dir: Path` (must be inside an allowed read/write root; otherwise deny)
+Safety guard: enabling `network` requires explicit acknowledgement (`network_unsafe_ack: true`). When sandboxing is disabled, network policy cannot be enforced, so `network_unsafe_ack` must still be true even if `network` is disabled.
 
-Safety guidance: avoid allowlisting broad roots like `/` or a home directory unless you explicitly accept the risk. Prefer a dedicated workspace or temp directory with the minimum required scope.
+#### FsPolicy
+- `allowed_read: [Path]` (absolute allowlist; empty means “deny all reads except system baseline required by the host OS + runtime”)
+- `allowed_write: [Path]` (absolute allowlist; default should be an artifacts dir + an internal temp dir)
+- `working_dir: Path` (absolute path; must be inside an allowed read/write root; otherwise deny)
+
+Safety guard: allowlisting `/`, the current user's home directory, or system roots like `/System`, `/Library`, `/Users`, `/private`, or `/Volumes` is rejected with `E_POLICY_DENIED` to prevent catastrophic access. Prefer a dedicated workspace or temp directory with the minimum required scope. When `fs_strict_write` is enabled, any write access (artifacts or sandbox profile writes) requires `fs_write_unsafe_ack: true`.
+All filesystem paths are normalized (resolving `.` and `..`) before allowlist checks; traversal cannot bypass allowlisted roots.
+Write access requires explicit acknowledgement via `fs_write_unsafe_ack: true` when `allowed_write` is non-empty.
 
 #### ExecPolicy
-- `allowed_executables: [Path]` (exact paths; default empty ⇒ deny)
+- `allowed_executables: [Path]` (absolute paths; default empty ⇒ deny)
 - `allow_shell: bool` (default false; when false, argv exec only; no `sh -c`)
 
 #### EnvPolicy
@@ -106,8 +120,17 @@ Safety guidance: avoid allowlisting broad roots like `/` or a home directory unl
 
 #### ArtifactsPolicy
 - `enabled: bool`
-- `dir: Path`
+- `dir: Path` (absolute path; required when enabled; used if CLI does not supply `--artifacts`)
 - `overwrite: bool`
+
+Artifacts writes must stay within filesystem write allowlists. The artifacts dir is validated against `fs.allowed_write` (after path normalization) and denied with `E_POLICY_DENIED` if it falls outside.
+
+#### ReplayPolicy
+- `strict: bool` (default false; disables normalization when true)
+- `normalization_filters: [NormalizationFilter]?` (optional; when set, overrides default replay normalization)
+- `normalization_rules: [NormalizationRule]?` (optional; regex replacements applied during replay)
+
+Replay normalization is driven by the policy unless the CLI explicitly overrides it (e.g., `--strict` or `--normalize`). When strict is true, normalization filters are ignored and comparisons are exact.
 
 ### Scenario
 Scenarios are deterministic “scripts” for driving TUIs.
@@ -120,7 +143,7 @@ Scenarios are deterministic “scripts” for driving TUIs.
 #### RunConfig
 - `command: Path`
 - `args: [String]`
-- `cwd: Path`
+- `cwd: Path` (absolute path)
 - `initial_size: TerminalSize` (`rows`, `cols`)
 - `policy: PolicyRef | InlinePolicy` (either reference a policy file or embed)
 
@@ -225,9 +248,13 @@ Artifacts are the on-disk trace of a run.
   - `run.json` (RunResult; includes `run_result_version` and `protocol_version`)
   - `transcript.log`
   - `snapshots/0001.json` (ScreenSnapshot)
-  - `events.jsonl` (optional stream of observations/events)
+  - `events.jsonl` (optional NDJSON stream of `Observation` records)
+  - `normalization.json` (NormalizationRecord; replay normalization filters applied)
+  - `checksums.json` (map of artifact relative paths to 64-bit checksums)
   - `policy.json` (effective policy)
   - `scenario.json` (resolved scenario)
+  - `replay.json` (ReplaySummary; written into `replay-<run_id>/` during replay)
+  - `diff.json` (ReplayDiff; written into `replay-<run_id>/` when replay fails)
 
 ### RunResult (run.json)
 `RunResult` is the canonical summary produced by `tui-use` for automation and reporting.
@@ -269,6 +296,45 @@ Artifacts are the on-disk trace of a run.
 - `success: bool`
 - `exit_code: i32?` (when exited normally)
 - `signal: i32?` (when terminated by signal)
+
+### NormalizationRecord (normalization.json)
+Normalization is only applied during replay comparisons. The applied filters must be recorded.
+
+- `normalization_version: u32`
+- `filters: [NormalizationFilter]`
+- `strict: bool`
+- `source: "default" | "policy" | "cli" | "none"`
+- `rules: [NormalizationRule]` (optional; regex replacements)
+
+### ReplaySummary (replay.json)
+Replay summary written alongside replay artifacts.
+
+- `replay_version: u32`
+- `status: "passed" | "failed"`
+- `source: "default" | "policy" | "cli" | "none"`
+- `strict: bool`
+- `filters: [NormalizationFilter]`
+- `rules: [NormalizationRule]`
+- `mismatch: { kind: String, index: u64? }?`
+
+### ReplayDiff (diff.json)
+- `code: String`
+- `message: String`
+- `context: JsonValue?`
+
+### NormalizationFilter
+Canonical filters (snake_case):
+- `snapshot_id` (ignore `snapshot_id` fields)
+- `run_id` (ignore `run_id` fields)
+- `run_timestamps` (ignore run `started_at_ms`/`ended_at_ms`)
+- `step_timestamps` (ignore step `started_at_ms`/`ended_at_ms`)
+- `observation_timestamp` (ignore observation `timestamp_ms`)
+- `session_id` (ignore observation `session_id`)
+
+### NormalizationRule
+- `target: "transcript" | "snapshot_lines"`
+- `pattern: String` (regex)
+- `replace: String`
 - `terminated_by_harness: bool`
 
 ### ErrorInfo
@@ -316,11 +382,23 @@ Primary entrypoints:
 Non-interactive:
 - `tui-use run --scenario <path> --artifacts <dir> --json`
 - `tui-use exec --artifacts <dir> --json -- <cmd> [args...]`
+- `tui-use exec --explain-policy --json -- <cmd> [args...]` (prints allow/deny + error details; does not run)
+- `tui-use run --scenario <path> --explain-policy --json` (prints allow/deny + error details; does not run)
+
+Notes:
+- In `--json` mode, stdout contains only JSON/NDJSON. Diagnostics are emitted on stderr.
+- A `RunResult` with `status: Failed` still emits JSON on stdout but exits non-zero, using the stable exit codes below.
 
 Interactive (optional, recommended for LLM tooling):
 - `tui-use driver --stdio --json -- <cmd> [args...]`
-  - Reads NDJSON `Action` messages from stdin
+  - Reads NDJSON `DriverInput` messages from stdin
   - Writes NDJSON `Observation`/`RunResult` messages to stdout
+
+#### DriverInput (NDJSON)
+Messages sent to the driver are wrapped with a protocol version.
+
+- `protocol_version: u32`
+- `action: Action`
 
 ## Error model (fail fast and loud)
 Errors must be typed, structured, and stable for automation.
@@ -343,6 +421,20 @@ Errors must be typed, structured, and stable for automation.
 - `E_PROCESS_EXITED`
 - `E_TERMINAL_PARSE`
 - `E_PROTOCOL_VERSION_MISMATCH`
+- `E_REPLAY_MISMATCH`
+
+### Exit codes (stable)
+- `1`: unknown/internal
+- `2`: policy denied
+- `3`: sandbox unavailable
+- `4`: timeout/budget exceeded
+- `5`: assertion failed
+- `6`: process exited unsuccessfully
+- `7`: terminal parse failure
+- `8`: protocol version mismatch
+- `9`: protocol error
+- `10`: I/O failure
+- `11`: replay mismatch
 
 All user-facing errors must include:
 - `code` (stable)

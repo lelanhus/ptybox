@@ -104,7 +104,18 @@ impl Session {
                     .payload
                     .get("key")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| RunnerError::protocol("E_PROTOCOL", "missing key payload"))?;
+                    .ok_or_else(|| {
+                        RunnerError::protocol_with_context(
+                            "E_PROTOCOL",
+                            "missing or invalid 'key' field in key action payload",
+                            serde_json::json!({
+                                "received_payload": action.payload,
+                                "expected": {"key": "string"},
+                                "supported_keys": ["Enter", "Up", "Down", "Left", "Right", "Tab", "Escape", "Backspace", "Delete", "Home", "End", "PageUp", "PageDown", "or single character"],
+                                "example": {"type": "key", "payload": {"key": "Enter"}}
+                            }),
+                        )
+                    })?;
                 let bytes = key_to_bytes(key)?;
                 self.writer
                     .write_all(&bytes)
@@ -119,7 +130,17 @@ impl Session {
                     .payload
                     .get("text")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| RunnerError::protocol("E_PROTOCOL", "missing text payload"))?;
+                    .ok_or_else(|| {
+                        RunnerError::protocol_with_context(
+                            "E_PROTOCOL",
+                            "missing or invalid 'text' field in text action payload",
+                            serde_json::json!({
+                                "received_payload": action.payload,
+                                "expected": {"text": "string"},
+                                "example": {"type": "text", "payload": {"text": "hello world"}}
+                            }),
+                        )
+                    })?;
                 self.writer
                     .write_all(text.as_bytes())
                     .map_err(|err| RunnerError::io("E_IO", "failed to write text", err))?;
@@ -135,15 +156,33 @@ impl Session {
                     .payload
                     .get("rows")
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| RunnerError::protocol("E_PROTOCOL", "missing rows"))?
-                    as u16;
+                    .ok_or_else(|| {
+                        RunnerError::protocol_with_context(
+                            "E_PROTOCOL",
+                            "missing or invalid 'rows' field in resize action payload",
+                            serde_json::json!({
+                                "received_payload": action.payload,
+                                "expected": {"rows": "number (u16)", "cols": "number (u16)"},
+                                "example": {"type": "resize", "payload": {"rows": 24, "cols": 80}}
+                            }),
+                        )
+                    })? as u16;
                 #[allow(clippy::cast_possible_truncation)]
                 let cols = action
                     .payload
                     .get("cols")
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| RunnerError::protocol("E_PROTOCOL", "missing cols"))?
-                    as u16;
+                    .ok_or_else(|| {
+                        RunnerError::protocol_with_context(
+                            "E_PROTOCOL",
+                            "missing or invalid 'cols' field in resize action payload",
+                            serde_json::json!({
+                                "received_payload": action.payload,
+                                "expected": {"rows": "number (u16)", "cols": "number (u16)"},
+                                "example": {"type": "resize", "payload": {"rows": 24, "cols": 80}}
+                            }),
+                        )
+                    })? as u16;
                 self.master
                     .resize(PtySize {
                         rows,
@@ -297,6 +336,22 @@ fn signal_process_group(pgid: Pid, signal: Signal) -> Result<(), RunnerError> {
     }
 }
 
+const SUPPORTED_KEYS: &[&str] = &[
+    "Enter",
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "Tab",
+    "Escape",
+    "Backspace",
+    "Delete",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+];
+
 fn key_to_bytes(key: &str) -> Result<Vec<u8>, RunnerError> {
     let bytes = match key {
         "Enter" => vec![b'\r'],
@@ -305,11 +360,27 @@ fn key_to_bytes(key: &str) -> Result<Vec<u8>, RunnerError> {
         "Right" => b"\x1b[C".to_vec(),
         "Left" => b"\x1b[D".to_vec(),
         "Tab" => vec![b'\t'],
+        "Escape" => vec![0x1b],
+        "Backspace" => vec![0x7f],
+        "Delete" => b"\x1b[3~".to_vec(),
+        "Home" => b"\x1b[H".to_vec(),
+        "End" => b"\x1b[F".to_vec(),
+        "PageUp" => b"\x1b[5~".to_vec(),
+        "PageDown" => b"\x1b[6~".to_vec(),
         _ => {
             if key.len() == 1 {
                 return Ok(key.as_bytes().to_vec());
             }
-            return Err(RunnerError::protocol("E_PROTOCOL", "unsupported key"));
+            return Err(RunnerError::protocol_with_context(
+                "E_PROTOCOL",
+                format!("unsupported key '{key}'"),
+                serde_json::json!({
+                    "received_key": key,
+                    "supported_keys": SUPPORTED_KEYS,
+                    "note": "Single characters are also supported (e.g., 'a', '1', '@')",
+                    "example": {"type": "key", "payload": {"key": "Enter"}}
+                }),
+            ));
         }
     };
     Ok(bytes)
