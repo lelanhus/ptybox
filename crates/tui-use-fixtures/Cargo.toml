@@ -1,9 +1,12 @@
 [package]
 name = "tui-use-fixtures"
 version = "0.1.0"
+description = "Test fixtures for tui-use TUI automation"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+publish = false  # Internal testing crate
 
 [[bin]]
 name = "tui-use-echo-fixture"

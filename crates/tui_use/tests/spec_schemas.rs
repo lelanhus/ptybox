@@ -118,3 +118,82 @@ fn validate_enums(schema: &serde_json::Value, instance: &serde_json::Value) {
         }
     }
 }
+
+// Tests for new Tier 1 schemas
+
+#[test]
+fn scenario_schema_is_valid_json() {
+    let data = fs::read_to_string(schema_path("scenario.schema.json")).unwrap();
+    let _: serde_json::Value = serde_json::from_str(&data).unwrap();
+}
+
+#[test]
+fn run_result_schema_is_valid_json() {
+    let data = fs::read_to_string(schema_path("run-result.schema.json")).unwrap();
+    let _: serde_json::Value = serde_json::from_str(&data).unwrap();
+}
+
+#[test]
+fn observation_schema_is_valid_json() {
+    let data = fs::read_to_string(schema_path("observation.schema.json")).unwrap();
+    let _: serde_json::Value = serde_json::from_str(&data).unwrap();
+}
+
+#[test]
+fn scenario_example_conforms_to_schema_subset() {
+    let schema: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(schema_path("scenario.schema.json")).unwrap())
+            .unwrap();
+    let example: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(example_path("audio-extractor-inline.json")).unwrap(),
+    )
+    .unwrap();
+    validate_required(&schema, &example);
+    validate_enums(&schema, &example);
+}
+
+#[test]
+fn scenario_schema_has_required_fields() {
+    let schema: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(schema_path("scenario.schema.json")).unwrap())
+            .unwrap();
+
+    // Verify the schema declares its required top-level fields
+    let required = schema.get("required").and_then(|v| v.as_array()).unwrap();
+    let required_strings: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(required_strings.contains(&"scenario_version"));
+    assert!(required_strings.contains(&"metadata"));
+    assert!(required_strings.contains(&"run"));
+    assert!(required_strings.contains(&"steps"));
+}
+
+#[test]
+fn run_result_schema_has_required_fields() {
+    let schema: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(schema_path("run-result.schema.json")).unwrap())
+            .unwrap();
+
+    // Verify the schema declares its required top-level fields
+    let required = schema.get("required").and_then(|v| v.as_array()).unwrap();
+    let required_strings: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(required_strings.contains(&"run_result_version"));
+    assert!(required_strings.contains(&"protocol_version"));
+    assert!(required_strings.contains(&"run_id"));
+    assert!(required_strings.contains(&"status"));
+}
+
+#[test]
+fn observation_schema_has_required_fields() {
+    let schema: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(schema_path("observation.schema.json")).unwrap())
+            .unwrap();
+
+    // Verify the schema declares its required top-level fields
+    let required = schema.get("required").and_then(|v| v.as_array()).unwrap();
+    let required_strings: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(required_strings.contains(&"protocol_version"));
+    assert!(required_strings.contains(&"run_id"));
+    assert!(required_strings.contains(&"session_id"));
+    assert!(required_strings.contains(&"timestamp_ms"));
+    assert!(required_strings.contains(&"screen"));
+}

@@ -1,9 +1,14 @@
 [package]
 name = "tui-use-cli"
 version = "0.1.0"
+description = "CLI for tui-use: security-focused TUI automation and testing"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [[bin]]
 name = "tui-use"

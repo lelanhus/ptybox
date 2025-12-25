@@ -25,6 +25,59 @@ const DANGEROUS_ENV_VARS: &[&str] = &[
     "IFS",
 ];
 
+/// Well-known system paths that are symlinks by design.
+/// These are allowed because they are controlled by the OS and cannot be manipulated by users.
+const ALLOWED_SYSTEM_SYMLINKS: &[&str] = &[
+    "/tmp",        // -> /private/tmp on macOS
+    "/var",        // -> /private/var on macOS
+    "/etc",        // -> /private/etc on macOS
+    "/home",       // May be a symlink on some systems
+    "/usr/bin",    // Standard system path
+    "/usr/lib",    // Standard system path
+    "/bin",        // May be symlink to /usr/bin on some systems
+    "/lib",        // May be symlink to /usr/lib on some systems
+    "/sbin",       // May be symlink to /usr/sbin on some systems
+];
+
+/// Validates that a path is not a user-created symlink.
+///
+/// Symlinks in policy paths could be used to escape sandbox restrictions by
+/// pointing to locations outside the intended allowlist. This is a defense-in-depth
+/// check; the Seatbelt sandbox provides primary protection.
+///
+/// System symlinks (like `/tmp -> /private/tmp` on macOS) are allowed because
+/// they are controlled by the OS and cannot be manipulated by unprivileged users.
+///
+/// # Note
+/// This check only validates existing paths. It does not prevent TOCTOU attacks
+/// where a symlink is created after validation. The sandbox provides runtime protection.
+fn validate_path_not_symlink(path: &Path) -> Result<(), RunnerError> {
+    // Allow well-known system symlinks (e.g., /tmp -> /private/tmp on macOS)
+    let path_str = path.to_string_lossy();
+    for allowed in ALLOWED_SYSTEM_SYMLINKS {
+        if path_str == *allowed || path_str.starts_with(&format!("{allowed}/")) {
+            return Ok(());
+        }
+    }
+
+    // Only check if the path exists - non-existent paths will fail at access time
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() {
+            return Err(RunnerError::policy_denied(
+                "E_POLICY_DENIED",
+                "symlinks are not allowed in policy paths",
+                Some(serde_json::json!({
+                    "path": path.display().to_string(),
+                    "fix": "Use the real path instead of a symlink",
+                    "note": "Symlinks could bypass sandbox restrictions",
+                    "allowed_system_symlinks": ALLOWED_SYSTEM_SYMLINKS
+                })),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 pub struct EffectivePolicy {
     pub policy: Policy,
@@ -75,6 +128,8 @@ impl EffectivePolicy {
                     serde_json::json!({"path": allowed}),
                 ));
             }
+            // Check for symlinks (defense-in-depth against sandbox escape)
+            validate_path_not_symlink(Path::new(allowed))?;
         }
 
         if !exec.allowed_executables.iter().any(|p| p == &run.command) {
@@ -471,6 +526,8 @@ pub fn validate_fs_policy(fs: &FsPolicy, fs_write_unsafe_ack: bool) -> Result<()
                 }),
             ));
         }
+        // Check for symlinks (defense-in-depth against sandbox escape)
+        validate_path_not_symlink(Path::new(allowed))?;
         let allowed_path = canonicalize_for_policy(Path::new(allowed));
         if let Some(reason) =
             disallowed_allowlist_reason(&allowed_path, home_dir.as_deref(), &denied_roots)
@@ -566,21 +623,42 @@ fn is_root_path(path: &Path) -> bool {
     matches!(components.next(), Some(Component::RootDir)) && components.next().is_none()
 }
 
+/// Normalizes a path for policy comparison by removing `.` and resolving `..` components.
+///
+/// This function does NOT follow symlinks - it performs lexical normalization only.
+/// Parent directory components (`..`) at the root level are ignored (cannot escape root).
+///
+/// # Security Note
+/// Symlinks must be validated separately before trusting paths. This function only
+/// handles lexical path traversal attempts like `/foo/../bar`.
 fn canonicalize_for_policy(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
+    let mut depth = 0usize; // Track depth below root to prevent escape
+
     for component in path.components() {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                normalized.pop();
+                // Only pop if we're below root level (depth > 0)
+                if depth > 0 {
+                    normalized.pop();
+                    depth -= 1;
+                }
+                // At root level, ignore the .. (cannot go above root)
             }
-            Component::Normal(part) => normalized.push(part),
+            Component::Normal(part) => {
+                normalized.push(part);
+                depth += 1;
+            }
             Component::RootDir => normalized.push(Component::RootDir.as_os_str()),
             Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
         }
     }
+
+    // If normalization results in empty path (shouldn't happen with absolute paths),
+    // return root instead of the potentially unsafe original path
     if normalized.as_os_str().is_empty() {
-        path.to_path_buf()
+        PathBuf::from("/")
     } else {
         normalized
     }

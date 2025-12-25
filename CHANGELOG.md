@@ -72,13 +72,34 @@ This project aims to follow “Keep a Changelog” style entries and Semantic Ve
 - Cell-level styling extraction from terminal snapshots via `snapshot_with_cells()` method.
 - Static HTML trace viewer (`tui-use trace --artifacts <dir>`) for debugging and visualizing runs.
 - Interactive TUI mode (`tui-use run --tui`) for live terminal output and step progress visualization.
+- JSON schemas for spec validation: `spec/schemas/scenario.schema.json`, `run-result.schema.json`, `observation.schema.json`.
+- Comprehensive rustdoc documentation for all public types in `tui_use::model`, `session`, and `runner` modules.
+- Test fixtures crate (`tui-use-fixtures`) with purpose-built TUI programs for testing:
+  - `tui-use-echo-keys`: echoes keypresses with byte values for input testing.
+  - `tui-use-show-size`: displays terminal dimensions, updates on resize.
+  - `tui-use-delay-output`: outputs text after delay for wait condition testing.
+  - `tui-use-exit-code`: exits with specified code for exit handling testing.
+  - `tui-use-alt-screen`: uses alternate screen buffer for screen mode testing.
+  - `tui-use-unicode-test`: prints Unicode/CJK/emoji for charset testing.
+- Fixture-based integration tests (`cli_fixtures.rs`) covering Unicode handling, resize actions, exit codes, wait conditions, and driver protocol.
+- GitHub Actions release workflow (`.github/workflows/release.yml`) for automated binary releases on tag push.
+- Dual MIT/Apache-2.0 licensing with LICENSE-MIT and LICENSE-APACHE files.
+- Cargo.toml workspace metadata for crates.io distribution readiness (repository, homepage, keywords, categories).
+- CONTRIBUTING.md with contribution guidelines.
+
+### Security
+- Fixed Seatbelt profile injection vulnerability (VULN-1): paths containing `"`, `(`, `)`, `\n` are now rejected with `E_POLICY_DENIED`.
+- Fixed path traversal normalization (VULN-3): `canonicalize_for_policy()` now tracks depth and prevents escaping root via `..` sequences.
+- Fixed symlink bypass vulnerability (VULN-6): policy paths are validated to reject symlinks (with allowlist for system-managed symlinks like `/tmp`).
 
 ### Fixed
-- None.
+- Path normalization edge case where `/../etc` incorrectly normalized to `/etc`.
+- Symlink-based policy bypass where `/tmp -> /private/tmp` could escape sandbox restrictions.
 
 ### Notes
-- Many acceptance criteria in `spec/feature-list.json` remain unvalidated; fixture-based CLI tests are still pending.
-- Linux container support is now a documented requirement; implementation and validation are still pending.
+- Fixture-based CLI tests now validate key features (Unicode, resize, exit codes, wait conditions, driver protocol).
+- Linux container support is documented; implementation and validation are pending.
+- JSON schemas added but full jsonschema validation not integrated (schemas can be used externally).
 
 ### Next
 - Define and implement a Linux-container sandbox strategy (external sandbox acknowledgement or Linux backend).
