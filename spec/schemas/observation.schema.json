@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "observation.schema.json",
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "run_id",
+    "session_id",
+    "timestamp_ms",
+    "screen",
+    "events"
+  ],
+  "properties": {
+    "protocol_version": { "type": "integer" },
+    "run_id": { "type": "string", "format": "uuid" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "timestamp_ms": { "type": "integer", "minimum": 0 },
+    "screen": { "$ref": "#/$defs/ScreenSnapshot" },
+    "transcript_delta": { "type": ["string", "null"] },
+    "events": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Event" }
+    }
+  },
+  "$defs": {
+    "ScreenSnapshot": {
+      "type": "object",
+      "required": [
+        "snapshot_version",
+        "snapshot_id",
+        "rows",
+        "cols",
+        "cursor",
+        "alternate_screen",
+        "lines"
+      ],
+      "properties": {
+        "snapshot_version": { "type": "integer" },
+        "snapshot_id": { "type": "string", "format": "uuid" },
+        "rows": { "type": "integer", "minimum": 1 },
+        "cols": { "type": "integer", "minimum": 1 },
+        "cursor": { "$ref": "#/$defs/Cursor" },
+        "alternate_screen": { "type": "boolean" },
+        "lines": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "cells": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Cell" }
+          }
+        }
+      }
+    },
+    "Cursor": {
+      "type": "object",
+      "required": ["row", "col", "visible"],
+      "properties": {
+        "row": { "type": "integer", "minimum": 0 },
+        "col": { "type": "integer", "minimum": 0 },
+        "visible": { "type": "boolean" }
+      }
+    },
+    "Cell": {
+      "type": "object",
+      "required": ["ch", "width", "style"],
+      "properties": {
+        "ch": { "type": "string" },
+        "width": { "type": "integer", "minimum": 0 },
+        "style": { "$ref": "#/$defs/Style" }
+      }
+    },
+    "Style": {
+      "type": "object",
+      "required": ["fg", "bg", "bold", "italic", "underline", "inverse"],
+      "properties": {
+        "fg": { "$ref": "#/$defs/Color" },
+        "bg": { "$ref": "#/$defs/Color" },
+        "bold": { "type": "boolean" },
+        "italic": { "type": "boolean" },
+        "underline": { "type": "boolean" },
+        "inverse": { "type": "boolean" }
+      }
+    },
+    "Color": {
+      "oneOf": [
+        { "type": "string", "const": "default" },
+        {
+          "type": "object",
+          "required": ["ansi_16"],
+          "properties": { "ansi_16": { "type": "integer", "minimum": 0, "maximum": 15 } }
+        },
+        {
+          "type": "object",
+          "required": ["ansi_256"],
+          "properties": { "ansi_256": { "type": "integer", "minimum": 0, "maximum": 255 } }
+        },
+        {
+          "type": "object",
+          "required": ["rgb"],
+          "properties": {
+            "rgb": {
+              "type": "object",
+              "required": ["r", "g", "b"],
+              "properties": {
+                "r": { "type": "integer", "minimum": 0, "maximum": 255 },
+                "g": { "type": "integer", "minimum": 0, "maximum": 255 },
+                "b": { "type": "integer", "minimum": 0, "maximum": 255 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Event": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string" },
+        "message": { "type": ["string", "null"] },
+        "details": {}
+      }
+    }
+  }
+}

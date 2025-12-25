@@ -23,16 +23,32 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Result type alias for runner operations.
 pub type RunnerResult<T> = Result<T, RunnerError>;
 
+/// Error type for runner operations with stable error codes.
+///
+/// Error codes are stable and map to specific exit codes for automation.
+/// See `spec/data-model.md` for the complete list.
+///
+/// # Common Error Codes
+/// - `E_POLICY_DENIED` (exit 2): Policy validation failed
+/// - `E_TIMEOUT` (exit 4): Budget exceeded
+/// - `E_ASSERTION_FAILED` (exit 5): Assertion did not pass
+/// - `E_PROCESS_EXIT` (exit 6): Process exited unexpectedly
+/// - `E_IO` (exit 10): I/O failure
 #[derive(Debug)]
 pub struct RunnerError {
+    /// Stable error code (e.g., `E_POLICY_DENIED`).
     pub code: String,
+    /// Human-readable error message.
     pub message: String,
+    /// Structured context for debugging.
     pub context: Option<Value>,
 }
 
 impl RunnerError {
+    /// Create a policy denied error.
     pub fn policy_denied(
         code: impl Into<String>,
         message: impl Into<String>,
@@ -45,6 +61,7 @@ impl RunnerError {
         }
     }
 
+    /// Create a timeout error (budget exceeded).
     pub fn timeout(
         code: impl Into<String>,
         message: impl Into<String>,
@@ -57,6 +74,7 @@ impl RunnerError {
         }
     }
 
+    /// Create a protocol error (invalid JSON or version mismatch).
     pub fn protocol(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
@@ -77,6 +95,7 @@ impl RunnerError {
         }
     }
 
+    /// Create an I/O error.
     pub fn io(
         code: impl Into<String>,
         message: impl Into<String>,
@@ -190,6 +209,17 @@ fn emit_progress(progress: Option<&Arc<dyn ProgressCallback>>, event: ProgressEv
 }
 
 /// Run a scenario with the given options.
+///
+/// This is the primary entry point for scenario-based execution.
+/// For simple command execution without scenarios, use [`run_exec`].
+///
+/// # Arguments
+/// * `scenario` - Scenario to execute (from file or constructed)
+/// * `options` - Runner configuration (artifacts, progress callback)
+///
+/// # Errors
+/// Returns `RunnerError` for policy violations, timeouts, I/O failures, etc.
+/// The error code indicates the specific failure type.
 pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<RunResult> {
     let run_id = RunId::new();
     let run_started = Instant::now();
@@ -645,6 +675,19 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
     result
 }
 
+/// Run a single command under policy control.
+///
+/// Simpler alternative to [`run_scenario`] when you just need to execute
+/// a command without step sequences or assertions.
+///
+/// # Arguments
+/// * `command` - Command to execute (absolute path recommended)
+/// * `args` - Command arguments
+/// * `cwd` - Working directory (optional)
+/// * `policy` - Security policy to apply
+///
+/// # Errors
+/// Returns `RunnerError` for policy violations, timeouts, I/O failures, etc.
 pub fn run_exec(
     command: String,
     args: Vec<String>,
@@ -654,6 +697,10 @@ pub fn run_exec(
     run_exec_with_options(command, args, cwd, policy, RunnerOptions::default())
 }
 
+/// Run a single command with custom options.
+///
+/// Like [`run_exec`] but with additional configuration options for
+/// artifact collection and progress callbacks.
 pub fn run_exec_with_options(
     command: String,
     args: Vec<String>,
@@ -862,6 +909,15 @@ fn validate_policy(policy: &Policy) -> RunnerResult<()> {
     Ok(())
 }
 
+/// Load a scenario from a file.
+///
+/// Supports both JSON and YAML formats (detected by extension).
+///
+/// # Arguments
+/// * `path` - Path to scenario file
+///
+/// # Errors
+/// Returns `RunnerError` if the file cannot be read or parsed.
 pub fn load_scenario(path: &str) -> RunnerResult<Scenario> {
     crate::scenario::load_scenario_file(path)
 }

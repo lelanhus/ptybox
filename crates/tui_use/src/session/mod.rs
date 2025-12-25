@@ -1,3 +1,8 @@
+//! PTY session management for driving TUI applications.
+//!
+//! This module provides [`Session`] for spawning and interacting with
+//! terminal applications via a pseudo-terminal (PTY).
+
 use crate::model::PROTOCOL_VERSION;
 use crate::model::{Action, ActionType, Observation, RunId, SessionId, TerminalSize};
 use crate::policy::apply_env_policy;
@@ -14,6 +19,26 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// A PTY-backed session for driving a TUI application.
+///
+/// # Example
+/// ```no_run
+/// use tui_use::session::{Session, SessionConfig};
+/// use tui_use::model::{RunId, TerminalSize};
+/// use std::time::Duration;
+///
+/// let config = SessionConfig {
+///     command: "/bin/cat".to_string(),
+///     args: vec![],
+///     cwd: None,
+///     size: TerminalSize::default(),
+///     run_id: RunId::new(),
+///     env: Default::default(),
+/// };
+/// let mut session = Session::spawn(config).unwrap();
+/// let observation = session.observe(Duration::from_millis(50)).unwrap();
+/// session.terminate().unwrap();
+/// ```
 pub struct Session {
     run_id: RunId,
     session_id: SessionId,
@@ -25,17 +50,28 @@ pub struct Session {
     started_at: Instant,
 }
 
+/// Configuration for spawning a session.
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
+    /// Command to execute (absolute path recommended).
     pub command: String,
+    /// Command arguments.
     pub args: Vec<String>,
+    /// Working directory.
     pub cwd: Option<String>,
+    /// Initial terminal size.
     pub size: TerminalSize,
+    /// Run identifier for this session.
     pub run_id: RunId,
+    /// Environment variable policy.
     pub env: crate::model::policy::EnvPolicy,
 }
 
 impl Session {
+    /// Spawn a new PTY session with the given configuration.
+    ///
+    /// # Errors
+    /// Returns `RunnerError` with code `E_IO` if PTY creation or command spawn fails.
     pub fn spawn(config: SessionConfig) -> Result<Self, RunnerError> {
         let system = native_pty_system();
         let pty_size = PtySize {
@@ -97,6 +133,13 @@ impl Session {
         })
     }
 
+    /// Send an action to the terminal session.
+    ///
+    /// Handles key presses, text input, resize, wait (no-op), and terminate.
+    ///
+    /// # Errors
+    /// - `E_IO`: Failed to write to PTY
+    /// - `E_PROTOCOL`: Invalid action payload
     pub fn send(&mut self, action: &Action) -> Result<(), RunnerError> {
         match action.action_type {
             ActionType::Key => {
@@ -203,6 +246,14 @@ impl Session {
         }
     }
 
+    /// Read terminal output and capture a screen snapshot.
+    ///
+    /// Reads available PTY output up to `timeout`, processes it through the
+    /// terminal emulator, and returns an observation with the current screen state.
+    ///
+    /// # Errors
+    /// - `E_IO`: Failed to read from PTY
+    /// - `E_TERMINAL_PARSE`: Output was not valid UTF-8
     pub fn observe(&mut self, timeout: Duration) -> Result<Observation, RunnerError> {
         let mut total = Vec::new();
         let deadline = Instant::now() + timeout;
@@ -262,6 +313,13 @@ impl Session {
         })
     }
 
+    /// Wait for the child process to exit.
+    ///
+    /// Returns `Some(ExitStatus)` if the process exits within `timeout`,
+    /// or `None` if the timeout expires.
+    ///
+    /// # Errors
+    /// - `E_IO`: Failed to check process status
     pub fn wait_for_exit(
         &mut self,
         timeout: Duration,
@@ -283,6 +341,13 @@ impl Session {
         }
     }
 
+    /// Send SIGTERM to the process group.
+    ///
+    /// This is a best-effort termination. For graceful shutdown with
+    /// fallback to SIGKILL, use [`terminate_process_group`](Self::terminate_process_group).
+    ///
+    /// # Errors
+    /// - `E_IO`: Failed to signal process
     pub fn terminate(&mut self) -> Result<(), RunnerError> {
         #[cfg(unix)]
         if let Some(pid) = self.child.process_id() {
@@ -297,6 +362,15 @@ impl Session {
             .map_err(|err| RunnerError::io("E_IO", "failed to terminate child", err))
     }
 
+    /// Gracefully terminate the process group with SIGTERM, falling back to SIGKILL.
+    ///
+    /// Sends SIGTERM, waits up to `grace` duration for exit, then sends SIGKILL
+    /// if still alive. Returns the exit status if the process terminates.
+    ///
+    /// This is the recommended way to terminate a session when you need the exit status.
+    ///
+    /// # Errors
+    /// - `E_IO`: Failed to signal or wait for process
     pub fn terminate_process_group(
         &mut self,
         grace: Duration,
@@ -318,6 +392,7 @@ impl Session {
         self.wait_for_exit(grace)
     }
 
+    /// Get the session identifier.
     pub fn session_id(&self) -> SessionId {
         self.session_id
     }

@@ -48,8 +48,24 @@ scripts/container-smoke.sh
 - `model` — All domain types: Policy, Scenario, RunResult, Observation, etc.
 
 ### Key Entry Points
-- Library: `tui_use::run::run_scenario()`, `tui_use::run::run_exec()`
-- Session API: `Session::spawn()`, `Session::send()`, `Session::observe()`
+
+**Run module** (primary entry points):
+```rust
+tui_use::run::run_scenario(scenario, options) -> RunnerResult<RunResult>
+tui_use::run::run_exec(command, args, cwd, policy) -> RunnerResult<RunResult>
+```
+
+**Session API** (lower-level PTY control):
+```rust
+Session::spawn(config: SessionConfig) -> Result<Session, RunnerError>
+Session::send(action: &Action) -> Result<(), RunnerError>
+Session::observe(timeout: Duration) -> Result<Observation, RunnerError>
+Session::terminate() -> Result<(), RunnerError>  // Sends SIGTERM
+Session::terminate_process_group(grace: Duration) -> Result<Option<ExitStatus>, RunnerError>
+Session::wait_for_exit(timeout: Duration) -> Result<Option<ExitStatus>, RunnerError>
+```
+
+**Important**: `Session::wait_for()` does NOT exist. Wait conditions are handled internally by the runner via `wait_for_condition()`.
 
 ## Spec-First Discipline
 
@@ -78,6 +94,35 @@ scripts/container-smoke.sh
 - Filesystem allowlists must be absolute paths; rejects `/`, home dir, system roots
 - Write access requires explicit acknowledgement when `allowed_write` is non-empty
 
+## CLI Commands
+
+| Command | Purpose | Key Flags |
+|---------|---------|-----------|
+| `exec` | Run single command under policy | `--policy`, `--json`, `--artifacts` |
+| `run` | Execute scenario file | `--json`, `--artifacts`, `--normalize` |
+| `replay` | Compare run against baseline | `--baseline`, `--normalize` |
+| `replay-report` | Generate HTML diff report | `--baseline`, `--output` |
+| `driver` | Interactive NDJSON protocol | `--policy` |
+| `protocol-help` | Show protocol documentation | (none) |
+| `trace` | Generate HTML trace viewer | `--output`, `--open` |
+| `completions` | Generate shell completions | `--shell bash\|zsh\|fish` |
+
+## Error Codes
+
+| Code | Exit | Factory Method | Description |
+|------|------|----------------|-------------|
+| `E_POLICY_DENIED` | 2 | `policy_denied()` | Policy validation failed |
+| `E_SANDBOX_UNAVAILABLE` | 3 | `sandbox_unavailable()` | Sandbox not available on platform |
+| `E_TIMEOUT` | 4 | `timeout()` | Budget or step timeout exceeded |
+| `E_ASSERTION_FAILED` | 5 | `assertion_failed()` | Assertion did not pass |
+| `E_PROCESS_EXIT` | 6 | `process_exit()` | Process exited with non-zero code |
+| `E_TERMINAL_PARSE` | 7 | `terminal_parse()` | Terminal output parsing failed |
+| `E_PROTOCOL_VERSION` | 8 | `protocol()` | Protocol version mismatch |
+| `E_PROTOCOL` | 9 | `protocol()` | Generic protocol error |
+| `E_IO` | 10 | `io()` | I/O operation failed |
+| `E_REPLAY_MISMATCH` | 11 | `replay_mismatch()` | Replay comparison failed |
+| `E_CLI_INVALID_ARG` | 12 | `protocol()` | Invalid CLI argument |
+
 ## Stable Exit Codes
 
 | Code | Meaning |
@@ -92,3 +137,4 @@ scripts/container-smoke.sh
 | 9 | Protocol error |
 | 10 | I/O failure |
 | 11 | Replay mismatch |
+| 12 | Invalid CLI argument |

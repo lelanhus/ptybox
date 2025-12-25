@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scenario.schema.json",
+  "type": "object",
+  "required": ["scenario_version", "metadata", "run", "steps"],
+  "properties": {
+    "scenario_version": { "type": "integer" },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": ["string", "null"] }
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": ["command", "args", "initial_size", "policy"],
+      "properties": {
+        "command": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "cwd": { "type": ["string", "null"] },
+        "initial_size": {
+          "type": "object",
+          "required": ["rows", "cols"],
+          "properties": {
+            "rows": { "type": "integer", "minimum": 1 },
+            "cols": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "policy": {
+          "oneOf": [
+            { "$ref": "policy.schema.json" },
+            { "type": "string", "description": "Path to policy file" }
+          ]
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Step" }
+    }
+  },
+  "$defs": {
+    "Step": {
+      "type": "object",
+      "required": ["id", "name", "action", "timeout_ms", "retries"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "action": { "$ref": "#/$defs/Action" },
+        "assert": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Assertion" }
+        },
+        "timeout_ms": { "type": "integer", "minimum": 0 },
+        "retries": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Action": {
+      "type": "object",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["key", "text", "resize", "wait", "terminate"]
+        },
+        "payload": { "type": "object" }
+      }
+    },
+    "Assertion": {
+      "type": "object",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "screen_contains",
+            "screen_matches",
+            "line_equals",
+            "line_starts_with",
+            "line_ends_with",
+            "cursor_at",
+            "exit_code"
+          ]
+        },
+        "payload": { "type": "object" }
+      }
+    }
+  }
+}

@@ -296,6 +296,7 @@ Artifacts are the on-disk trace of a run.
 - `success: bool`
 - `exit_code: i32?` (when exited normally)
 - `signal: i32?` (when terminated by signal)
+- `terminated_by_harness: bool` (true when tui-use forcibly killed the process, e.g., due to timeout)
 
 ### NormalizationRecord (normalization.json)
 Normalization is only applied during replay comparisons. The applied filters must be recorded.
@@ -371,32 +372,64 @@ The tool is designed for programmatic use (scripts and LLM tools) without MCP.
 
 ### Rust library API (normative)
 Primary entrypoints:
-- `tui_use::run::run_scenario(scenario, options) -> RunResult`
-- `tui_use::session::Session::spawn(config) -> Session`
-- `Session::send(action) -> Result<()>`
-- `Session::observe() -> Result<Observation>`
-- `Session::wait_for(condition, timeout) -> Result<Observation>`
-- `Session::terminate(mode) -> Result<ExitStatus>`
+- `tui_use::run::run_scenario(scenario, options) -> RunnerResult<RunResult>`
+- `tui_use::run::run_scenario_with_options(scenario, options) -> RunnerResult<RunResult>`
+- `tui_use::run::run_exec(command, args, cwd, policy) -> RunnerResult<RunResult>`
+- `tui_use::run::run_exec_with_options(command, args, cwd, policy, options) -> RunnerResult<RunResult>`
+
+Session API:
+- `tui_use::session::Session::spawn(config: SessionConfig) -> Result<Session, RunnerError>`
+- `Session::send(action: &Action) -> Result<(), RunnerError>`
+- `Session::observe(timeout: Duration) -> Result<Observation, RunnerError>`
+- `Session::wait_for_exit(timeout: Duration) -> Result<Option<ExitStatus>, RunnerError>`
+- `Session::terminate() -> Result<(), RunnerError>`
+- `Session::terminate_process_group(grace: Duration) -> Result<Option<ExitStatus>, RunnerError>`
+- `Session::session_id() -> SessionId`
+
+Configuration types:
+- `RunnerOptions { artifacts: Option<ArtifactsWriterConfig>, progress: Option<Arc<dyn ProgressCallback>> }`
+- `SessionConfig { command, args, cwd, size, run_id, env }`
 
 ### CLI API (normative)
-Non-interactive:
-- `tui-use run --scenario <path> --artifacts <dir> --json`
-- `tui-use exec --artifacts <dir> --json -- <cmd> [args...]`
-- `tui-use exec --explain-policy --json -- <cmd> [args...]` (prints allow/deny + error details; does not run)
-- `tui-use run --scenario <path> --explain-policy --json` (prints allow/deny + error details; does not run)
+
+#### Execution commands
+- `tui-use exec --json -- <cmd> [args...]` — run a single command under policy
+- `tui-use run --scenario <path> --json` — run a scenario file
+- `tui-use driver --stdio --json -- <cmd> [args...]` — interactive NDJSON session
+
+Common flags:
+- `--policy <path>` — use policy file
+- `--artifacts <dir>` — write artifacts to directory
+- `--explain-policy` — print allow/deny + error details; do not run
+- `--no-sandbox --ack-unsafe-sandbox` — disable sandbox (requires acknowledgment)
+- `--enable-network --ack-unsafe-network` — enable network (requires acknowledgment)
+- `--ack-unsafe-write` — acknowledge write access
+- `--verbose` / `-v` — show step-by-step progress (run command)
+- `--tui` — run with interactive TUI showing live terminal (run command)
+
+#### Replay commands
+- `tui-use replay --artifacts <dir> --json` — compare artifacts against baseline
+- `tui-use replay-report --artifacts <dir> --json` — read latest replay summary
+
+Replay flags:
+- `--strict` — disable normalization for exact comparison
+- `--normalize <filter>` — apply normalization filter (snapshot_id, run_id, etc.)
+- `--require-events` — fail if events.jsonl is missing
+- `--require-checksums` — fail if checksums.json is missing
+
+#### Utility commands
+- `tui-use protocol-help --json` — output protocol documentation for LLM consumption
+- `tui-use trace --artifacts <dir> -o <file>` — generate interactive HTML trace viewer
+- `tui-use completions <shell>` — generate shell completions (bash, zsh, fish)
 
 Notes:
 - In `--json` mode, stdout contains only JSON/NDJSON. Diagnostics are emitted on stderr.
-- A `RunResult` with `status: Failed` still emits JSON on stdout but exits non-zero, using the stable exit codes below.
-
-Interactive (optional, recommended for LLM tooling):
-- `tui-use driver --stdio --json -- <cmd> [args...]`
-  - Reads NDJSON `DriverInput` messages from stdin
-  - Writes NDJSON `Observation`/`RunResult` messages to stdout
+- A `RunResult` with `status: Failed` still emits JSON on stdout but exits non-zero, using the stable exit codes.
 
 #### DriverInput (NDJSON)
-Messages sent to the driver are wrapped with a protocol version.
+Interactive driver mode reads NDJSON `DriverInput` messages from stdin and writes NDJSON `Observation`/`RunResult` to stdout.
 
+Message format:
 - `protocol_version: u32`
 - `action: Action`
 
@@ -413,28 +446,34 @@ Errors must be typed, structured, and stable for automation.
 - `Protocol`: malformed JSON/NDJSON or version mismatch.
 - `Internal`: bug; includes a short, actionable message and guidance to file an issue.
 
-### Stable error codes (examples)
-- `E_POLICY_DENIED`
-- `E_SANDBOX_UNAVAILABLE`
-- `E_TIMEOUT`
-- `E_ASSERTION_FAILED`
-- `E_PROCESS_EXITED`
-- `E_TERMINAL_PARSE`
-- `E_PROTOCOL_VERSION_MISMATCH`
-- `E_REPLAY_MISMATCH`
+### Stable error codes
+- `E_POLICY_DENIED` - policy validation failed
+- `E_SANDBOX_UNAVAILABLE` - sandbox backend unavailable
+- `E_TIMEOUT` - budget exceeded (runtime, wait, step, output)
+- `E_ASSERTION_FAILED` - assertion did not pass
+- `E_PROCESS_EXIT` - process exited unexpectedly or non-zero
+- `E_TERMINAL_PARSE` - terminal output parse failure
+- `E_PROTOCOL_VERSION_MISMATCH` - incompatible protocol version
+- `E_PROTOCOL` - malformed protocol message
+- `E_IO` - I/O failure
+- `E_REPLAY_MISMATCH` - replay comparison failed
+- `E_CLI_INVALID_ARG` - invalid CLI argument
+- `E_INTERNAL` - internal error (bug)
 
 ### Exit codes (stable)
+- `0`: success
 - `1`: unknown/internal
-- `2`: policy denied
-- `3`: sandbox unavailable
-- `4`: timeout/budget exceeded
-- `5`: assertion failed
-- `6`: process exited unsuccessfully
-- `7`: terminal parse failure
-- `8`: protocol version mismatch
-- `9`: protocol error
-- `10`: I/O failure
-- `11`: replay mismatch
+- `2`: policy denied (`E_POLICY_DENIED`)
+- `3`: sandbox unavailable (`E_SANDBOX_UNAVAILABLE`)
+- `4`: timeout/budget exceeded (`E_TIMEOUT`)
+- `5`: assertion failed (`E_ASSERTION_FAILED`)
+- `6`: process exited unsuccessfully (`E_PROCESS_EXIT`)
+- `7`: terminal parse failure (`E_TERMINAL_PARSE`)
+- `8`: protocol version mismatch (`E_PROTOCOL_VERSION_MISMATCH`)
+- `9`: protocol error (`E_PROTOCOL`)
+- `10`: I/O failure (`E_IO`)
+- `11`: replay mismatch (`E_REPLAY_MISMATCH`)
+- `12`: CLI invalid argument (`E_CLI_INVALID_ARG`)
 
 All user-facing errors must include:
 - `code` (stable)

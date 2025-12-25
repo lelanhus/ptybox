@@ -13,6 +13,30 @@ path = "src/bin/echo_tui.rs"
 name = "tui-use-time-fixture"
 path = "src/bin/time_tui.rs"
 
+[[bin]]
+name = "tui-use-echo-keys"
+path = "src/bin/echo_keys.rs"
+
+[[bin]]
+name = "tui-use-show-size"
+path = "src/bin/show_size.rs"
+
+[[bin]]
+name = "tui-use-delay-output"
+path = "src/bin/delay_output.rs"
+
+[[bin]]
+name = "tui-use-exit-code"
+path = "src/bin/exit_code.rs"
+
+[[bin]]
+name = "tui-use-alt-screen"
+path = "src/bin/alt_screen.rs"
+
+[[bin]]
+name = "tui-use-unicode-test"
+path = "src/bin/unicode_test.rs"
+
 [dependencies]
 libc = "0.2"
 

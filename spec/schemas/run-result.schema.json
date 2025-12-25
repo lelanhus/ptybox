@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "run-result.schema.json",
+  "type": "object",
+  "required": [
+    "run_result_version",
+    "protocol_version",
+    "run_id",
+    "status",
+    "started_at_ms",
+    "ended_at_ms",
+    "command",
+    "args",
+    "cwd",
+    "policy"
+  ],
+  "properties": {
+    "run_result_version": { "type": "integer" },
+    "protocol_version": { "type": "integer" },
+    "run_id": { "type": "string", "format": "uuid" },
+    "status": {
+      "type": "string",
+      "enum": ["passed", "failed", "errored", "canceled"]
+    },
+    "started_at_ms": { "type": "integer", "minimum": 0 },
+    "ended_at_ms": { "type": "integer", "minimum": 0 },
+    "command": { "type": "string" },
+    "args": { "type": "array", "items": { "type": "string" } },
+    "cwd": { "type": "string" },
+    "policy": { "$ref": "policy.schema.json" },
+    "scenario": {
+      "oneOf": [
+        { "$ref": "scenario.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "steps": {
+      "oneOf": [
+        { "type": "array", "items": { "$ref": "#/$defs/StepResult" } },
+        { "type": "null" }
+      ]
+    },
+    "final_observation": {
+      "oneOf": [
+        { "$ref": "observation.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "exit_status": {
+      "oneOf": [
+        { "$ref": "#/$defs/ExitStatus" },
+        { "type": "null" }
+      ]
+    },
+    "error": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorInfo" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "$defs": {
+    "StepResult": {
+      "type": "object",
+      "required": [
+        "step_id",
+        "name",
+        "status",
+        "attempts",
+        "started_at_ms",
+        "ended_at_ms",
+        "action",
+        "assertions"
+      ],
+      "properties": {
+        "step_id": { "type": "string" },
+        "name": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "errored", "skipped"]
+        },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "started_at_ms": { "type": "integer", "minimum": 0 },
+        "ended_at_ms": { "type": "integer", "minimum": 0 },
+        "action": { "type": "object" },
+        "assertions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AssertionResult" }
+        },
+        "error": {
+          "oneOf": [
+            { "$ref": "#/$defs/ErrorInfo" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "AssertionResult": {
+      "type": "object",
+      "required": ["type", "passed"],
+      "properties": {
+        "type": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "message": { "type": ["string", "null"] },
+        "details": {}
+      }
+    },
+    "ExitStatus": {
+      "type": "object",
+      "required": ["success", "terminated_by_harness"],
+      "properties": {
+        "success": { "type": "boolean" },
+        "exit_code": { "type": ["integer", "null"] },
+        "signal": { "type": ["integer", "null"] },
+        "terminated_by_harness": { "type": "boolean" }
+      }
+    },
+    "ErrorInfo": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "context": {}
+      }
+    }
+  }
+}
