@@ -83,3 +83,218 @@ fn regex_match_passes_when_pattern_matches() {
     assert!(passed);
     assert!(message.is_none());
 }
+
+// ============ line_equals tests ============
+
+#[test]
+fn line_equals_passes_when_line_matches_exactly() {
+    let observation = observation_with_lines(&["first line", "second line", "third line"]);
+    let assertion = Assertion {
+        assertion_type: "line_equals".to_string(),
+        payload: serde_json::json!({"line": 1, "text": "second line"}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(passed, "line_equals should pass: {:?}", message);
+    assert!(message.is_none());
+}
+
+#[test]
+fn line_equals_fails_when_line_differs() {
+    let observation = observation_with_lines(&["first line", "second line"]);
+    let assertion = Assertion {
+        assertion_type: "line_equals".to_string(),
+        payload: serde_json::json!({"line": 0, "text": "wrong text"}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(!passed);
+    assert!(message.is_some());
+}
+
+#[test]
+fn line_equals_fails_when_line_out_of_bounds() {
+    let observation = observation_with_lines(&["only line"]);
+    let assertion = Assertion {
+        assertion_type: "line_equals".to_string(),
+        payload: serde_json::json!({"line": 99, "text": "anything"}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(!passed);
+    assert!(message.is_some());
+    assert!(message.unwrap().contains("out of bounds"));
+}
+
+// ============ line_contains tests ============
+
+#[test]
+fn line_contains_passes_when_substring_present() {
+    let observation = observation_with_lines(&["hello world", "goodbye world"]);
+    let assertion = Assertion {
+        assertion_type: "line_contains".to_string(),
+        payload: serde_json::json!({"line": 0, "text": "hello"}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(passed, "line_contains should pass: {:?}", message);
+    assert!(message.is_none());
+}
+
+#[test]
+fn line_contains_fails_when_substring_absent() {
+    let observation = observation_with_lines(&["hello world"]);
+    let assertion = Assertion {
+        assertion_type: "line_contains".to_string(),
+        payload: serde_json::json!({"line": 0, "text": "missing"}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(!passed);
+    assert!(message.is_some());
+}
+
+// ============ line_matches tests ============
+
+#[test]
+fn line_matches_passes_when_regex_matches() {
+    let observation = observation_with_lines(&["user: admin", "role: superuser"]);
+    let assertion = Assertion {
+        assertion_type: "line_matches".to_string(),
+        payload: serde_json::json!({"line": 0, "pattern": "user:\\s+\\w+"}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(passed, "line_matches should pass: {:?}", message);
+    assert!(message.is_none());
+}
+
+#[test]
+fn line_matches_fails_with_invalid_regex() {
+    let observation = observation_with_lines(&["test"]);
+    let assertion = Assertion {
+        assertion_type: "line_matches".to_string(),
+        payload: serde_json::json!({"line": 0, "pattern": "[invalid"}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(!passed);
+    assert!(message.is_some());
+    assert!(message.unwrap().contains("invalid regex"));
+}
+
+// ============ not_contains tests ============
+
+#[test]
+fn not_contains_passes_when_text_absent() {
+    let observation = observation_with_lines(&["hello world"]);
+    let assertion = Assertion {
+        assertion_type: "not_contains".to_string(),
+        payload: serde_json::json!({"text": "goodbye"}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(passed, "not_contains should pass: {:?}", message);
+    assert!(message.is_none());
+}
+
+#[test]
+fn not_contains_fails_when_text_present() {
+    let observation = observation_with_lines(&["hello world"]);
+    let assertion = Assertion {
+        assertion_type: "not_contains".to_string(),
+        payload: serde_json::json!({"text": "hello"}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(!passed);
+    assert!(message.is_some());
+}
+
+// ============ screen_empty tests ============
+
+#[test]
+fn screen_empty_passes_when_all_whitespace() {
+    let observation = observation_with_lines(&["", "   ", "\t"]);
+    let assertion = Assertion {
+        assertion_type: "screen_empty".to_string(),
+        payload: serde_json::json!({}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(passed, "screen_empty should pass: {:?}", message);
+    assert!(message.is_none());
+}
+
+#[test]
+fn screen_empty_fails_when_content_present() {
+    let observation = observation_with_lines(&["", "x", ""]);
+    let assertion = Assertion {
+        assertion_type: "screen_empty".to_string(),
+        payload: serde_json::json!({}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(!passed);
+    assert!(message.is_some());
+}
+
+// ============ cursor_visible tests ============
+
+#[test]
+fn cursor_visible_passes_when_visible() {
+    let mut observation = observation_with_lines(&["test"]);
+    observation.screen.cursor.visible = true;
+    let assertion = Assertion {
+        assertion_type: "cursor_visible".to_string(),
+        payload: serde_json::json!({}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(passed, "cursor_visible should pass: {:?}", message);
+    assert!(message.is_none());
+}
+
+#[test]
+fn cursor_visible_fails_when_hidden() {
+    let mut observation = observation_with_lines(&["test"]);
+    observation.screen.cursor.visible = false;
+    let assertion = Assertion {
+        assertion_type: "cursor_visible".to_string(),
+        payload: serde_json::json!({}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(!passed);
+    assert!(message.is_some());
+}
+
+// ============ cursor_hidden tests ============
+
+#[test]
+fn cursor_hidden_passes_when_hidden() {
+    let mut observation = observation_with_lines(&["test"]);
+    observation.screen.cursor.visible = false;
+    let assertion = Assertion {
+        assertion_type: "cursor_hidden".to_string(),
+        payload: serde_json::json!({}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(passed, "cursor_hidden should pass: {:?}", message);
+    assert!(message.is_none());
+}
+
+#[test]
+fn cursor_hidden_fails_when_visible() {
+    let mut observation = observation_with_lines(&["test"]);
+    observation.screen.cursor.visible = true;
+    let assertion = Assertion {
+        assertion_type: "cursor_hidden".to_string(),
+        payload: serde_json::json!({}),
+    };
+
+    let (passed, message, _) = evaluate(&observation, &assertion);
+    assert!(!passed);
+    assert!(message.is_some());
+}

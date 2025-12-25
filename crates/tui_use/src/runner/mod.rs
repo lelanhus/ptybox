@@ -1,3 +1,5 @@
+pub mod progress;
+
 use crate::artifacts::{ArtifactsWriter, ArtifactsWriterConfig};
 use crate::model::policy::Policy;
 use crate::model::{
@@ -13,10 +15,12 @@ use crate::policy::{
 use crate::scenario::load_policy_ref;
 use crate::session::{Session, SessionConfig};
 use miette::Diagnostic;
+pub use progress::{NoopProgress, ProgressCallback, ProgressEvent};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub type RunnerResult<T> = Result<T, RunnerError>;
@@ -58,6 +62,18 @@ impl RunnerError {
             code: code.into(),
             message: message.into(),
             context: None,
+        }
+    }
+
+    pub fn protocol_with_context(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        context: impl Into<Option<Value>>,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            context: context.into(),
         }
     }
 
@@ -130,9 +146,22 @@ impl std::error::Error for RunnerError {
 
 impl Diagnostic for RunnerError {}
 
-#[derive(Clone, Debug, Default)]
+/// Options for configuring scenario execution.
+#[derive(Clone, Default)]
 pub struct RunnerOptions {
+    /// Artifacts writer configuration.
     pub artifacts: Option<ArtifactsWriterConfig>,
+    /// Progress callback for receiving execution events.
+    pub progress: Option<Arc<dyn ProgressCallback>>,
+}
+
+impl std::fmt::Debug for RunnerOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunnerOptions")
+            .field("artifacts", &self.artifacts)
+            .field("progress", &self.progress.as_ref().map(|_| "..."))
+            .finish()
+    }
 }
 
 fn resolve_artifacts_config(
@@ -153,10 +182,28 @@ fn resolve_artifacts_config(
     None
 }
 
+/// Emit a progress event if a callback is configured.
+fn emit_progress(progress: Option<&Arc<dyn ProgressCallback>>, event: ProgressEvent) {
+    if let Some(callback) = progress {
+        callback.on_progress(&event);
+    }
+}
+
+/// Run a scenario with the given options.
 pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<RunResult> {
     let run_id = RunId::new();
     let run_started = Instant::now();
     let scenario_clone = scenario.clone();
+    let progress = options.progress.clone();
+
+    // Emit run started event
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::RunStarted {
+            run_id,
+            total_steps: scenario.steps.len(),
+        },
+    );
 
     let mut artifacts: Option<ArtifactsWriter> = None;
 
@@ -238,7 +285,7 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
         let mut run_error: Option<RunnerError> = None;
         let mut output_bytes: u64 = 0;
 
-        for step in &scenario.steps {
+        for (step_index, step) in scenario.steps.iter().enumerate() {
             if run_error.is_some() {
                 step_results.push(StepResult {
                     step_id: step.id,
@@ -273,6 +320,16 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                 });
                 continue;
             }
+
+            // Emit step started event (1-based index for display)
+            emit_progress(
+                progress.as_ref(),
+                ProgressEvent::StepStarted {
+                    step_id: step.id,
+                    step_index: step_index + 1,
+                    name: step.name.clone(),
+                },
+            );
 
             let step_started_ms = elapsed_ms(&run_started);
             let mut attempts = 0;
@@ -384,7 +441,7 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
             step_results.push(StepResult {
                 step_id: step.id,
                 name: step.name.clone(),
-                status,
+                status: status.clone(),
                 attempts,
                 started_at_ms: step_started_ms,
                 ended_at_ms: step_ended_ms,
@@ -392,6 +449,18 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                 assertions: assertion_results.clone(),
                 error: error_info,
             });
+
+            // Emit step completed event
+            emit_progress(
+                progress.as_ref(),
+                ProgressEvent::StepCompleted {
+                    step_id: step.id,
+                    name: step.name.clone(),
+                    status,
+                    duration_ms: step_ended_ms - step_started_ms,
+                    assertions: assertion_results,
+                },
+            );
         }
 
         let final_observation = session.observe(Duration::from_millis(10)).ok();
@@ -513,10 +582,30 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
             writer.write_run_result(&run_result)?;
         }
 
+        // Emit run completed event
+        emit_progress(
+            progress.as_ref(),
+            ProgressEvent::RunCompleted {
+                run_id,
+                success: run_result.status == RunStatus::Passed,
+                duration_ms: run_result.ended_at_ms,
+            },
+        );
+
         Ok(run_result)
     })();
 
     if let Err(err) = &result {
+        // Emit run completed event for error case
+        emit_progress(
+            progress.as_ref(),
+            ProgressEvent::RunCompleted {
+                run_id,
+                success: false,
+                duration_ms: elapsed_ms(&run_started),
+            },
+        );
+
         if let Some(writer) = artifacts.as_mut() {
             let policy = policy_for_error.clone().unwrap_or_default();
             let _ = writer.write_policy(&policy);
@@ -816,7 +905,28 @@ fn wait_for_condition(
     policy: &Policy,
 ) -> RunnerResult<crate::model::Observation> {
     let wait_payload: WaitPayload = serde_json::from_value(action.payload.clone())
-        .map_err(|_| RunnerError::protocol("E_PROTOCOL", "invalid wait payload"))?;
+        .map_err(|e| {
+            RunnerError::protocol_with_context(
+                "E_PROTOCOL",
+                "invalid wait action payload",
+                serde_json::json!({
+                    "parse_error": e.to_string(),
+                    "received_payload": action.payload,
+                    "expected": {
+                        "condition": {
+                            "type": "screen_contains | screen_matches | cursor_at | process_exited",
+                            "payload": "object (varies by condition type)"
+                        }
+                    },
+                    "examples": {
+                        "screen_contains": {"condition": {"type": "screen_contains", "payload": {"text": "Ready"}}},
+                        "screen_matches": {"condition": {"type": "screen_matches", "payload": {"pattern": "\\$\\s*$"}}},
+                        "cursor_at": {"condition": {"type": "cursor_at", "payload": {"row": 0, "col": 0}}},
+                        "process_exited": {"condition": {"type": "process_exited", "payload": {}}}
+                    }
+                }),
+            )
+        })?;
     let max_wait = Duration::from_millis(policy.budgets.max_wait_ms);
     let wait_timeout = if timeout > max_wait {
         max_wait

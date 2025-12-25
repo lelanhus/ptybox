@@ -10,10 +10,12 @@
 #![allow(clippy::unreachable)] // Used for exhaustive enum matching
 #![allow(clippy::fn_params_excessive_bools)] // CLI flags are naturally bools
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{generate, Shell};
 use miette::{IntoDiagnostic, Result};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tui_use::artifacts::ArtifactsWriterConfig;
 use tui_use::model::policy::Policy;
 use tui_use::policy::explain_policy_for_run_config;
@@ -22,9 +24,25 @@ use tui_use::runner::{
 };
 use tui_use::scenario::load_policy_file;
 
+/// Color output mode
+#[derive(Copy, Clone, Debug, Default, ValueEnum)]
+enum ColorMode {
+    /// Auto-detect based on terminal and `NO_COLOR` env
+    #[default]
+    Auto,
+    /// Always use colors
+    Always,
+    /// Never use colors
+    Never,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "tui-use", version, about = "Safe TUI automation harness")]
 struct Cli {
+    /// Control color output
+    #[arg(long, value_enum, default_value = "auto", global = true)]
+    color: ColorMode,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -78,6 +96,10 @@ enum Commands {
         scenario: PathBuf,
         #[arg(long)]
         explain_policy: bool,
+        #[arg(long, short = 'v', help = "Show step-by-step progress to stderr")]
+        verbose: bool,
+        #[arg(long, help = "Run with interactive TUI showing live terminal output")]
+        tui: bool,
         #[arg(
             long,
             help = "Write artifacts to this directory (requires allowlisted write access)"
@@ -144,10 +166,73 @@ enum Commands {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
+    /// Output protocol documentation for LLM consumption
+    ProtocolHelp {
+        #[arg(long, help = "Output as JSON (default: human-readable)")]
+        json: bool,
+    },
+    /// Generate shell completions for bash, zsh, or fish
+    Completions {
+        #[arg(value_enum, help = "Shell to generate completions for")]
+        shell: Shell,
+    },
+    /// Generate an interactive HTML trace viewer from run artifacts
+    Trace {
+        #[arg(long, help = "Path to artifacts directory")]
+        artifacts: PathBuf,
+        #[arg(long, short = 'o', help = "Output HTML file path (default: trace.html)")]
+        output: Option<PathBuf>,
+    },
+}
+
+mod progress;
+mod protocol_help;
+mod trace;
+mod tui_mode;
+
+/// Configure color output based on CLI flag and environment
+fn configure_colors(mode: ColorMode) {
+    let use_color = match mode {
+        ColorMode::Always => true,
+        ColorMode::Never => false,
+        ColorMode::Auto => {
+            // Respect NO_COLOR environment variable
+            if std::env::var("NO_COLOR").is_ok() {
+                false
+            } else {
+                // Check if stderr supports color (where we output diagnostics)
+                supports_color::on(supports_color::Stream::Stderr).is_some()
+            }
+        }
+    };
+
+    // Configure miette's graphical reporting based on color mode
+    if use_color {
+        miette::set_hook(Box::new(|_| {
+            Box::new(
+                miette::MietteHandlerOpts::new()
+                    .color(true)
+                    .unicode(true)
+                    .build(),
+            )
+        }))
+        .ok(); // Ignore error if hook already set
+    } else {
+        miette::set_hook(Box::new(|_| {
+            Box::new(
+                miette::MietteHandlerOpts::new()
+                    .color(false)
+                    .unicode(false)
+                    .build(),
+            )
+        }))
+        .ok(); // Ignore error if hook already set
+    }
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    configure_colors(cli.color);
     match cli.command {
         Commands::Exec {
             json,
@@ -198,6 +283,7 @@ fn main() -> Result<()> {
             }
             let options = RunnerOptions {
                 artifacts: artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite }),
+                progress: None,
             };
             let result = run_exec_with_options(cmd, args, cwd, policy, options);
             emit_result(json, result)
@@ -206,6 +292,8 @@ fn main() -> Result<()> {
             json,
             scenario,
             explain_policy,
+            verbose,
+            tui,
             artifacts,
             overwrite,
             no_sandbox,
@@ -244,8 +332,24 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             scenario.run.policy = tui_use::model::scenario::PolicyRef::Inline(policy);
+
+            // TUI mode runs the scenario in an interactive terminal UI
+            if tui {
+                if verbose || json {
+                    return emit_cli_error(json, "--tui cannot be combined with --verbose or --json");
+                }
+                let artifacts_config = artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite });
+                return tui_mode::run_tui(scenario, artifacts_config);
+            }
+
+            let progress_callback = if verbose {
+                Some(Arc::new(progress::VerboseProgress::new()) as Arc<dyn tui_use::runner::ProgressCallback>)
+            } else {
+                None
+            };
             let options = RunnerOptions {
                 artifacts: artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite }),
+                progress: progress_callback,
             };
             let result = run_scenario(scenario, options);
             emit_result(json, result)
@@ -272,6 +376,16 @@ fn main() -> Result<()> {
                 strict_write,
             );
             run_driver(cmd, args, policy)
+        }
+        Commands::ProtocolHelp { json } => {
+            let help = protocol_help::generate_protocol_help();
+            if json {
+                let output = serde_json::to_string_pretty(&help).into_diagnostic()?;
+                println!("{output}");
+            } else {
+                print_protocol_help_text(&help);
+            }
+            Ok(())
         }
         Commands::Replay {
             json,
@@ -337,6 +451,18 @@ fn main() -> Result<()> {
             } else {
                 eprintln!("replay report: {}", report.dir);
             }
+            Ok(())
+        }
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            let name = cmd.get_name().to_string();
+            generate(shell, &mut cmd, name, &mut io::stdout());
+            Ok(())
+        }
+        Commands::Trace { artifacts, output } => {
+            let output_path = output.unwrap_or_else(|| PathBuf::from("trace.html"));
+            trace::generate_trace(&artifacts, &output_path)?;
+            eprintln!("trace written to: {}", output_path.display());
             Ok(())
         }
     }
@@ -413,9 +539,28 @@ fn run_driver(command: String, args: Vec<String>, policy: Policy) -> Result<()> 
         }
         let input: DriverInput = match serde_json::from_str(&line) {
             Ok(value) => value,
-            Err(_) => {
-                emit_driver_error("E_PROTOCOL", "invalid json action", None)?;
-                return Err(miette::miette!("invalid json action"));
+            Err(e) => {
+                let context = serde_json::json!({
+                    "parse_error": e.to_string(),
+                    "received": line.chars().take(200).collect::<String>(),
+                    "expected_schema": {
+                        "protocol_version": "number (must be 1)",
+                        "action": {
+                            "type": "key | text | resize | wait | terminate",
+                            "payload": "object (varies by action type)"
+                        }
+                    },
+                    "example": {
+                        "protocol_version": 1,
+                        "action": {
+                            "type": "text",
+                            "payload": {"text": "hello"}
+                        }
+                    },
+                    "hint": "Run 'tui-use protocol-help --json' for full schema documentation"
+                });
+                emit_driver_error("E_PROTOCOL", "invalid json action", Some(context))?;
+                return Err(miette::miette!("invalid json action: {}", e));
             }
         };
         if input.protocol_version != PROTOCOL_VERSION {
@@ -555,6 +700,76 @@ fn emit_cli_error(json: bool, message: &str) -> Result<()> {
 
 fn exit_code_for_error(err: &RunnerError) -> i32 {
     exit_code_for_error_code(&err.code)
+}
+
+fn print_protocol_help_text(help: &protocol_help::ProtocolHelp) {
+    println!("tui-use Protocol Help");
+    println!("=====================");
+    println!();
+    println!("Protocol version: {}", help.protocol_version);
+    println!();
+    println!("COMMANDS");
+    println!("--------");
+    for (name, cmd) in &help.commands {
+        println!("  {name}");
+        println!("    {}", cmd.description);
+        println!("    Usage: {}", cmd.usage);
+        if let Some(flags) = &cmd.required_flags {
+            println!("    Required: {}", flags.join(", "));
+        }
+        println!();
+    }
+    println!("ACTION TYPES");
+    println!("------------");
+    if let Some(action_schema) = help.schemas.get("Action") {
+        if let Some(types) = &action_schema.types {
+            for (name, variant) in types {
+                let payload_desc: Vec<String> = variant
+                    .payload
+                    .iter()
+                    .map(|(k, v)| format!("{k}: {v}"))
+                    .collect();
+                if payload_desc.is_empty() {
+                    println!("  {name}: {{}}");
+                } else {
+                    println!("  {name}: {{{}}}", payload_desc.join(", "));
+                }
+            }
+        }
+    }
+    println!();
+    println!("WAIT CONDITIONS");
+    println!("---------------");
+    if let Some(cond_schema) = help.schemas.get("Condition") {
+        if let Some(types) = &cond_schema.types {
+            for (name, variant) in types {
+                let payload_desc: Vec<String> = variant
+                    .payload
+                    .iter()
+                    .map(|(k, v)| format!("{k}: {v}"))
+                    .collect();
+                if payload_desc.is_empty() {
+                    println!("  {name}: {{}}");
+                } else {
+                    println!("  {name}: {{{}}}", payload_desc.join(", "));
+                }
+            }
+        }
+    }
+    println!();
+    println!("ERROR CODES");
+    println!("-----------");
+    for (code, info) in &help.error_codes {
+        println!("  {code} (exit {}): {}", info.exit_code, info.description);
+    }
+    println!();
+    println!("QUICKSTART");
+    println!("----------");
+    for step in &help.quickstart.steps {
+        println!("  {step}");
+    }
+    println!();
+    println!("For full JSON documentation: tui-use protocol-help --json");
 }
 
 #[cfg(test)]

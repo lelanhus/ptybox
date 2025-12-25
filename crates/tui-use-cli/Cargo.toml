@@ -12,14 +12,21 @@ path = "src/main.rs"
 [dependencies]
 tui_use = { path = "../tui_use" }
 clap = { workspace = true }
+clap_complete = { workspace = true }
 miette = { workspace = true }
+supports-color = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+indicatif = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 serde_yml = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
