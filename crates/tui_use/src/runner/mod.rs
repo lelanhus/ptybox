@@ -244,7 +244,7 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
 
         validate_write_access(&policy, artifacts_dir.as_deref())?;
 
-        if let Some(config) = artifacts_config.clone() {
+        if let Some(config) = artifacts_config {
             validate_artifacts_dir(&config.dir, &policy.fs)?;
             let mut writer = ArtifactsWriter::new(run_id, config)?;
             writer.write_normalization(&NormalizationRecord {
@@ -258,7 +258,7 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
         }
 
         if let Some(writer) = artifacts.as_mut() {
-            writer.write_scenario(&scenario_clone)?;
+            writer.write_scenario(&scenario)?;
         }
 
         validate_policy(&policy)?;
@@ -713,7 +713,7 @@ pub fn run_exec_with_options(
 
         validate_write_access(&policy, artifacts_dir.as_deref())?;
 
-        if let Some(config) = artifacts_config.clone() {
+        if let Some(config) = artifacts_config {
             validate_artifacts_dir(&config.dir, &policy.fs)?;
             let mut writer = ArtifactsWriter::new(run_id, config)?;
             writer.write_normalization(&NormalizationRecord {

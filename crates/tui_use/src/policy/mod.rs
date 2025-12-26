@@ -9,19 +9,35 @@ use std::path::{Component, Path, PathBuf};
 
 /// Environment variables that could enable sandbox escape or library injection.
 /// These are blocked even if explicitly added to the allowlist.
+/// Note: On Unix, environment variables are case-sensitive, so we use exact matching.
+/// We include both uppercase and lowercase variants for common injection variables.
 const DANGEROUS_ENV_VARS: &[&str] = &[
+    // Linux library injection (uppercase - standard)
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
     "LD_AUDIT",
+    // Linux library injection (lowercase - paranoid defense)
+    "ld_preload",
+    "ld_library_path",
+    "ld_audit",
+    // macOS library injection (uppercase - standard)
     "DYLD_INSERT_LIBRARIES",
     "DYLD_LIBRARY_PATH",
     "DYLD_FRAMEWORK_PATH",
     "DYLD_FALLBACK_LIBRARY_PATH",
     "DYLD_ROOT_PATH",
+    // macOS library injection (lowercase - paranoid defense)
+    "dyld_insert_libraries",
+    "dyld_library_path",
+    "dyld_framework_path",
+    "dyld_fallback_library_path",
+    "dyld_root_path",
+    // Language paths
     "PYTHONPATH",
     "RUBYLIB",
     "PERL5LIB",
     "CLASSPATH",
+    // Shell/system
     "IFS",
     "GMON_OUT_PREFIX", // Profiling output directory
     "MALLOC_CONF",     // Memory allocator configuration
@@ -50,9 +66,21 @@ const ALLOWED_SYSTEM_SYMLINKS: &[&str] = &[
 /// System symlinks (like `/tmp -> /private/tmp` on macOS) are allowed because
 /// they are controlled by the OS and cannot be manipulated by unprivileged users.
 ///
-/// # Note
-/// This check only validates existing paths. It does not prevent TOCTOU attacks
-/// where a symlink is created after validation. The sandbox provides runtime protection.
+/// # Security Warning: TOCTOU Race Condition
+///
+/// **CRITICAL**: This check is vulnerable to Time-of-Check-Time-of-Use (TOCTOU) attacks.
+/// A malicious actor could:
+/// 1. Create a regular file at the allowed path
+/// 2. Wait for this validation to pass
+/// 3. Replace the file with a symlink to a sensitive location (e.g., `/etc/shadow`)
+/// 4. The process would then access the symlinked location
+///
+/// **Mitigation**: The Seatbelt sandbox provides runtime protection against this attack.
+/// When sandbox is disabled (`--no-sandbox --ack-unsafe-sandbox`), this TOCTOU race
+/// becomes exploitable. For high-security scenarios, always run with the sandbox enabled.
+///
+/// This limitation is inherent to the Unix filesystem model and cannot be fully
+/// mitigated without OS-level support (which Seatbelt provides on macOS).
 fn validate_path_not_symlink(path: &Path) -> Result<(), RunnerError> {
     // Allow well-known system symlinks (e.g., /tmp -> /private/tmp on macOS)
     let path_str = path.to_string_lossy();
@@ -424,11 +452,10 @@ pub fn apply_env_policy(
 
     if env_policy.inherit {
         for key in &env_policy.allowlist {
-            // Block dangerous environment variables that could enable sandbox escape
-            if DANGEROUS_ENV_VARS
-                .iter()
-                .any(|d| d.eq_ignore_ascii_case(key))
-            {
+            // Block dangerous environment variables that could enable sandbox escape.
+            // Note: Unix env vars are case-sensitive, so we use exact matching with
+            // explicit lowercase variants included in DANGEROUS_ENV_VARS.
+            if DANGEROUS_ENV_VARS.iter().any(|d| *d == key) {
                 return Err(RunnerError::policy_denied(
                     "E_POLICY_DENIED",
                     "dangerous environment variable blocked",
@@ -447,11 +474,9 @@ pub fn apply_env_policy(
     }
 
     for (key, value) in &env_policy.set {
-        // Block dangerous environment variables that could enable sandbox escape
-        if DANGEROUS_ENV_VARS
-            .iter()
-            .any(|d| d.eq_ignore_ascii_case(key))
-        {
+        // Block dangerous environment variables that could enable sandbox escape.
+        // Note: Unix env vars are case-sensitive, so we use exact matching.
+        if DANGEROUS_ENV_VARS.iter().any(|d| *d == key) {
             return Err(RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "dangerous environment variable blocked",
@@ -473,23 +498,30 @@ pub fn apply_env_policy(
 
 fn is_shell_command(command: &str, args: &[String]) -> bool {
     let shell_names = ["sh", "bash", "zsh", "dash", "fish", "ksh", "tcsh", "csh"];
-    let base = Path::new(command)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(command);
 
     // Block shell scripts by extension
     if command.ends_with(".sh") {
         return true;
     }
 
-    // Block any invocation of a known shell, not just -c flag
-    if shell_names.iter().any(|name| name == &base) {
+    // Resolve symlinks to get the real executable path, preventing bypass via symlinked shells.
+    // Example attack: `ln -s /bin/bash /tmp/mycommand` would bypass basename-only checking.
+    let resolved_path = std::fs::canonicalize(command).unwrap_or_else(|_| PathBuf::from(command));
+    let base = resolved_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(command);
+
+    // Block any invocation of a known shell
+    if shell_names.iter().any(|name| *name == base) {
         return true;
     }
 
-    // Also check for -c flag with any shell-like command for extra safety
-    let _ = args; // Keep args parameter for potential future use
+    // Check for -c flag which indicates shell command execution
+    if args.iter().any(|arg| arg == "-c") {
+        return true;
+    }
+
     false
 }
 

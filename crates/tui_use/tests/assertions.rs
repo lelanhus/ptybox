@@ -68,7 +68,13 @@ fn cursor_at_fails_when_position_mismatch() {
 
     let (passed, message, _) = evaluate(&observation, &assertion);
     assert!(!passed);
-    assert!(message.is_some());
+    let msg = message.expect("Should have failure message");
+    // Verify message contains cursor position info
+    assert!(
+        msg.contains("cursor") || msg.contains("position") || msg.contains("row") || msg.contains("col"),
+        "Message should mention cursor/position: {}",
+        msg
+    );
 }
 
 #[test]
@@ -109,7 +115,13 @@ fn line_equals_fails_when_line_differs() {
 
     let (passed, message, _) = evaluate(&observation, &assertion);
     assert!(!passed);
-    assert!(message.is_some());
+    let msg = message.expect("Should have failure message");
+    // Message should explain the mismatch (expected vs actual)
+    assert!(
+        msg.contains("first line") || msg.contains("wrong text") || msg.contains("expected") || msg.contains("actual"),
+        "Message should show expected/actual content: {}",
+        msg
+    );
 }
 
 #[test]
@@ -151,7 +163,13 @@ fn line_contains_fails_when_substring_absent() {
 
     let (passed, message, _) = evaluate(&observation, &assertion);
     assert!(!passed);
-    assert!(message.is_some());
+    let msg = message.expect("Should have failure message");
+    // Message should indicate what was being searched for
+    assert!(
+        msg.contains("missing") || msg.contains("not found") || msg.contains("does not contain"),
+        "Message should explain failure: {}",
+        msg
+    );
 }
 
 // ============ line_matches tests ============
@@ -208,7 +226,13 @@ fn not_contains_fails_when_text_present() {
 
     let (passed, message, _) = evaluate(&observation, &assertion);
     assert!(!passed);
-    assert!(message.is_some());
+    let msg = message.expect("Should have failure message");
+    // Message should indicate the unexpected text was found
+    assert!(
+        msg.contains("hello") || msg.contains("found") || msg.contains("present") || msg.contains("contains"),
+        "Message should explain failure: {}",
+        msg
+    );
 }
 
 // ============ screen_empty tests ============
@@ -236,7 +260,13 @@ fn screen_empty_fails_when_content_present() {
 
     let (passed, message, _) = evaluate(&observation, &assertion);
     assert!(!passed);
-    assert!(message.is_some());
+    let msg = message.expect("Should have failure message");
+    // Message should indicate screen is not empty
+    assert!(
+        msg.contains("empty") || msg.contains("content") || msg.contains("not"),
+        "Message should explain failure: {}",
+        msg
+    );
 }
 
 // ============ cursor_visible tests ============
@@ -266,7 +296,13 @@ fn cursor_visible_fails_when_hidden() {
 
     let (passed, message, _) = evaluate(&observation, &assertion);
     assert!(!passed);
-    assert!(message.is_some());
+    let msg = message.expect("Should have failure message");
+    // Message should explain cursor visibility issue
+    assert!(
+        msg.contains("cursor") || msg.contains("visible") || msg.contains("hidden"),
+        "Message should explain failure: {}",
+        msg
+    );
 }
 
 // ============ cursor_hidden tests ============
@@ -296,5 +332,11 @@ fn cursor_hidden_fails_when_visible() {
 
     let (passed, message, _) = evaluate(&observation, &assertion);
     assert!(!passed);
-    assert!(message.is_some());
+    let msg = message.expect("Should have failure message");
+    // Message should explain cursor visibility issue
+    assert!(
+        msg.contains("cursor") || msg.contains("visible") || msg.contains("hidden"),
+        "Message should explain failure: {}",
+        msg
+    );
 }

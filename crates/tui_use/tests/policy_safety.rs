@@ -408,3 +408,229 @@ fn policy_version_mismatch_is_rejected() {
     assert_eq!(err.code, "E_PROTOCOL");
     assert!(err.message.contains("policy_version"));
 }
+
+// =============================================================================
+// Shell Detection Tests
+// =============================================================================
+
+/// Test that shell commands are detected by basename
+#[test]
+fn shell_detection_blocks_direct_shell_invocation() {
+    let shells = [
+        "/bin/bash",
+        "/bin/sh",
+        "/usr/bin/zsh",
+        "/usr/local/bin/fish",
+    ];
+
+    for shell in shells {
+        let policy = Policy {
+            exec: tui_use::model::policy::ExecPolicy {
+                allowed_executables: vec![shell.to_string()],
+                allow_shell: false,
+            },
+            fs: FsPolicy {
+                allowed_read: vec!["/tmp".to_string()],
+                allowed_write: vec![],
+                working_dir: None,
+            },
+            ..Policy::default()
+        };
+        let run = RunConfig {
+            command: shell.to_string(),
+            args: vec![],
+            cwd: Some("/tmp".to_string()),
+            initial_size: TerminalSize::default(),
+            policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+        };
+        let err = EffectivePolicy::new(policy)
+            .validate_run_config(&run)
+            .unwrap_err();
+        assert_eq!(err.code, "E_POLICY_DENIED");
+        assert!(
+            err.message.contains("shell"),
+            "Shell {} should be blocked, got: {}",
+            shell,
+            err.message
+        );
+    }
+}
+
+/// Test that .sh extension is blocked
+#[test]
+fn shell_detection_blocks_sh_extension() {
+    let policy = Policy {
+        exec: tui_use::model::policy::ExecPolicy {
+            allowed_executables: vec!["/tmp/script.sh".to_string()],
+            allow_shell: false,
+        },
+        fs: FsPolicy {
+            allowed_read: vec!["/tmp".to_string()],
+            allowed_write: vec![],
+            working_dir: None,
+        },
+        ..Policy::default()
+    };
+    let run = RunConfig {
+        command: "/tmp/script.sh".to_string(),
+        args: vec![],
+        cwd: Some("/tmp".to_string()),
+        initial_size: TerminalSize::default(),
+        policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
+    let err = EffectivePolicy::new(policy)
+        .validate_run_config(&run)
+        .unwrap_err();
+    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert!(err.message.contains("shell"));
+}
+
+/// Test that -c flag is detected as shell command execution
+#[test]
+fn shell_detection_blocks_dash_c_flag() {
+    // Even a non-shell command with -c should be flagged as potentially
+    // attempting shell command execution
+    let policy = Policy {
+        exec: tui_use::model::policy::ExecPolicy {
+            allowed_executables: vec!["/usr/bin/python3".to_string()],
+            allow_shell: false,
+        },
+        fs: FsPolicy {
+            allowed_read: vec!["/tmp".to_string()],
+            allowed_write: vec![],
+            working_dir: None,
+        },
+        ..Policy::default()
+    };
+    let run = RunConfig {
+        command: "/usr/bin/python3".to_string(),
+        args: vec!["-c".to_string(), "print('hello')".to_string()],
+        cwd: Some("/tmp".to_string()),
+        initial_size: TerminalSize::default(),
+        policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
+    let err = EffectivePolicy::new(policy)
+        .validate_run_config(&run)
+        .unwrap_err();
+    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert!(err.message.contains("shell"));
+}
+
+/// Helper struct for cleaning up symlinks in tests
+struct SymlinkCleanup(std::path::PathBuf);
+impl Drop for SymlinkCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        let _ = std::fs::remove_dir(self.0.parent().unwrap());
+    }
+}
+
+/// Test that symlinked shells are detected via canonicalization
+#[test]
+fn shell_detection_blocks_symlinked_shell() {
+    use std::os::unix::fs::symlink;
+
+    // Create a temp dir and symlink
+    let temp_dir = std::env::temp_dir().join(format!("tui-use-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let symlink_path = temp_dir.join("not_a_shell");
+
+    // Create symlink to bash (if it exists)
+    let bash_path = std::path::Path::new("/bin/bash");
+    if !bash_path.exists() {
+        // Skip test if bash doesn't exist
+        return;
+    }
+
+    // Clean up any existing symlink
+    let _ = std::fs::remove_file(&symlink_path);
+    symlink(bash_path, &symlink_path).expect("Failed to create test symlink");
+
+    // Clean up on drop
+    let _cleanup = SymlinkCleanup(symlink_path.clone());
+
+    let policy = Policy {
+        exec: tui_use::model::policy::ExecPolicy {
+            allowed_executables: vec![symlink_path.display().to_string()],
+            allow_shell: false,
+        },
+        fs: FsPolicy {
+            allowed_read: vec!["/tmp".to_string(), temp_dir.display().to_string()],
+            allowed_write: vec![],
+            working_dir: None,
+        },
+        ..Policy::default()
+    };
+    let run = RunConfig {
+        command: symlink_path.display().to_string(),
+        args: vec![],
+        cwd: Some("/tmp".to_string()),
+        initial_size: TerminalSize::default(),
+        policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
+    let err = EffectivePolicy::new(policy)
+        .validate_run_config(&run)
+        .unwrap_err();
+    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert!(
+        err.message.contains("shell"),
+        "Symlinked bash should be detected as shell, got: {}",
+        err.message
+    );
+}
+
+/// Test that non-shell commands are allowed
+#[test]
+fn shell_detection_allows_non_shell_commands() {
+    let policy = Policy {
+        exec: tui_use::model::policy::ExecPolicy {
+            allowed_executables: vec!["/bin/echo".to_string()],
+            allow_shell: false,
+        },
+        fs: FsPolicy {
+            allowed_read: vec!["/tmp".to_string()],
+            allowed_write: vec![],
+            working_dir: None,
+        },
+        ..Policy::default()
+    };
+    let run = RunConfig {
+        command: "/bin/echo".to_string(),
+        args: vec!["hello".to_string()],
+        cwd: Some("/tmp".to_string()),
+        initial_size: TerminalSize::default(),
+        policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
+    // Should succeed - echo is not a shell
+    EffectivePolicy::new(policy)
+        .validate_run_config(&run)
+        .expect("/bin/echo should be allowed");
+}
+
+/// Test that shell commands with `allow_shell=true` are allowed
+#[test]
+fn shell_detection_allows_shells_when_enabled() {
+    let policy = Policy {
+        exec: tui_use::model::policy::ExecPolicy {
+            allowed_executables: vec!["/bin/bash".to_string()],
+            allow_shell: true, // Explicitly allow shells
+        },
+        fs: FsPolicy {
+            allowed_read: vec!["/tmp".to_string()],
+            allowed_write: vec![],
+            working_dir: None,
+        },
+        ..Policy::default()
+    };
+    let run = RunConfig {
+        command: "/bin/bash".to_string(),
+        args: vec![],
+        cwd: Some("/tmp".to_string()),
+        initial_size: TerminalSize::default(),
+        policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
+    // Should succeed when allow_shell is true
+    EffectivePolicy::new(policy)
+        .validate_run_config(&run)
+        .expect("bash should be allowed when allow_shell=true");
+}
