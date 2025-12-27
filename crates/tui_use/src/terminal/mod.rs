@@ -1,3 +1,52 @@
+//! Terminal emulation and screen snapshot capture.
+//!
+//! This module wraps the `vt100` crate to provide ANSI/VT100 terminal emulation,
+//! processing raw byte streams from a PTY and producing canonical screen snapshots
+//! that can be used for assertions, replay comparison, and artifact storage.
+//!
+//! # Key Types
+//!
+//! - [`Terminal`] - Terminal emulator that processes ANSI escape sequences
+//! - [`ScreenSnapshot`] - Immutable capture of terminal state (from `crate::model`)
+//! - [`Cell`] - Individual cell with character and styling (from `crate::model`)
+//!
+//! # Key Operations
+//!
+//! - [`Terminal::new`] - Create a new terminal with specified dimensions
+//! - [`Terminal::resize`] - Change terminal dimensions
+//! - [`Terminal::process_bytes`] - Feed raw PTY output through the emulator
+//! - [`Terminal::snapshot`] - Capture current screen state without cell styling
+//! - [`Terminal::snapshot_with_cells`] - Capture screen state with optional cell styling
+//!
+//! # Example
+//!
+//! ```
+//! use tui_use::terminal::Terminal;
+//! use tui_use::model::TerminalSize;
+//!
+//! # fn example() -> Result<(), tui_use::runner::RunnerError> {
+//! // Create a terminal with default size
+//! let mut terminal = Terminal::new(TerminalSize { rows: 24, cols: 80 });
+//!
+//! // Process some terminal output (including ANSI escape sequences)
+//! terminal.process_bytes(b"Hello, \x1b[1mBold\x1b[0m World!\r\n");
+//!
+//! // Capture the current screen state
+//! let snapshot = terminal.snapshot()?;
+//! assert!(snapshot.lines[0].contains("Hello"));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Terminal Features
+//!
+//! The underlying `vt100` parser supports:
+//! - Standard ANSI escape sequences (cursor movement, clearing, etc.)
+//! - Text attributes (bold, italic, underline, inverse)
+//! - 16-color, 256-color, and true color (RGB) support
+//! - Alternate screen buffer detection
+//! - Wide character (CJK) handling
+
 use crate::model::{Cell, Color, Cursor, ScreenSnapshot, SnapshotId, Style, TerminalSize};
 use crate::runner::RunnerError;
 use vt100::Parser;
@@ -61,41 +110,39 @@ impl Terminal {
     }
 }
 
-/// Extract cell data from the screen.
+/// Extract cell data from the screen using iterator chains.
 fn extract_cells(screen: &vt100::Screen, rows: u16, cols: u16) -> Vec<Vec<Cell>> {
-    let mut result = Vec::with_capacity(rows as usize);
+    (0..rows)
+        .map(|row_idx| {
+            (0..cols)
+                .filter_map(|col_idx| {
+                    screen.cell(row_idx, col_idx).and_then(|vt_cell| {
+                        // Skip wide character continuations - they're part of the previous cell
+                        if vt_cell.is_wide_continuation() {
+                            return None;
+                        }
+                        Some(vt_cell_to_cell(vt_cell))
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
 
-    for row_idx in 0..rows {
-        let mut row_cells = Vec::with_capacity(cols as usize);
-
-        for col_idx in 0..cols {
-            let vt_cell = screen.cell(row_idx, col_idx);
-            if let Some(vt_cell) = vt_cell {
-                // Skip wide character continuations - they're part of the previous cell
-                if vt_cell.is_wide_continuation() {
-                    continue;
-                }
-
-                let cell = Cell {
-                    ch: vt_cell.contents().to_string(),
-                    width: if vt_cell.is_wide() { 2 } else { 1 },
-                    style: Style {
-                        fg: convert_color(vt_cell.fgcolor()),
-                        bg: convert_color(vt_cell.bgcolor()),
-                        bold: vt_cell.bold(),
-                        italic: vt_cell.italic(),
-                        underline: vt_cell.underline(),
-                        inverse: vt_cell.inverse(),
-                    },
-                };
-                row_cells.push(cell);
-            }
-        }
-
-        result.push(row_cells);
+/// Convert a vt100 cell to our Cell model.
+fn vt_cell_to_cell(vt_cell: &vt100::Cell) -> Cell {
+    Cell {
+        ch: vt_cell.contents().to_string(),
+        width: if vt_cell.is_wide() { 2 } else { 1 },
+        style: Style {
+            fg: convert_color(vt_cell.fgcolor()),
+            bg: convert_color(vt_cell.bgcolor()),
+            bold: vt_cell.bold(),
+            italic: vt_cell.italic(),
+            underline: vt_cell.underline(),
+            inverse: vt_cell.inverse(),
+        },
     }
-
-    result
 }
 
 /// Convert vt100 color to our model color.

@@ -4,8 +4,8 @@ use crate::artifacts::{ArtifactsWriter, ArtifactsWriterConfig};
 use crate::model::policy::Policy;
 use crate::model::{
     Action, ActionType, AssertionResult, ExitStatus, NormalizationRecord, RunConfig, RunId,
-    RunResult, RunStatus, Scenario, StepResult, StepStatus, TerminalSize, NORMALIZATION_VERSION,
-    PROTOCOL_VERSION,
+    RunResult, RunStatus, Scenario, StepResult, StepStatus, TerminalSize, MAX_REGEX_PATTERN_LEN,
+    NORMALIZATION_VERSION, PROTOCOL_VERSION,
 };
 use crate::policy::{
     sandbox, validate_artifacts_dir, validate_artifacts_policy, validate_env_policy,
@@ -23,8 +23,124 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Compile a regex pattern with length validation to prevent `ReDoS` attacks.
+///
+/// # Errors
+/// Returns `E_PROTOCOL` if pattern exceeds `MAX_REGEX_PATTERN_LEN` or is invalid.
+pub fn compile_safe_regex(pattern: &str) -> Result<regex::Regex, RunnerError> {
+    if pattern.len() > MAX_REGEX_PATTERN_LEN {
+        return Err(RunnerError::protocol(
+            "E_PROTOCOL",
+            format!("regex pattern exceeds maximum length of {MAX_REGEX_PATTERN_LEN} characters"),
+            Some(serde_json::json!({
+                "pattern_length": pattern.len(),
+                "max_length": MAX_REGEX_PATTERN_LEN
+            })),
+        ));
+    }
+    regex::Regex::new(pattern)
+        .map_err(|err| RunnerError::protocol("E_PROTOCOL", format!("invalid regex: {err}"), None))
+}
+
 /// Result type alias for runner operations.
 pub type RunnerResult<T> = Result<T, RunnerError>;
+
+/// Stable error codes that map to specific exit codes for automation.
+///
+/// Each variant maps to a specific exit code, documented in `spec/data-model.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorCode {
+    /// Policy validation failed (exit 2).
+    PolicyDenied,
+    /// Sandbox not available on platform (exit 3).
+    SandboxUnavailable,
+    /// Budget or step timeout exceeded (exit 4).
+    Timeout,
+    /// Assertion did not pass (exit 5).
+    AssertionFailed,
+    /// Process exited with non-zero code (exit 6).
+    ProcessExit,
+    /// Terminal output parsing failed (exit 7).
+    TerminalParse,
+    /// Protocol version mismatch (exit 8).
+    ProtocolVersionMismatch,
+    /// Generic protocol error (exit 9).
+    Protocol,
+    /// I/O operation failed (exit 10).
+    Io,
+    /// Replay comparison failed (exit 11).
+    ReplayMismatch,
+    /// Invalid CLI argument (exit 12).
+    CliInvalidArg,
+    /// Internal error (exit 1).
+    Internal,
+}
+
+impl ErrorCode {
+    /// Get the string representation of the error code.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::PolicyDenied => "E_POLICY_DENIED",
+            Self::SandboxUnavailable => "E_SANDBOX_UNAVAILABLE",
+            Self::Timeout => "E_TIMEOUT",
+            Self::AssertionFailed => "E_ASSERTION_FAILED",
+            Self::ProcessExit => "E_PROCESS_EXIT",
+            Self::TerminalParse => "E_TERMINAL_PARSE",
+            Self::ProtocolVersionMismatch => "E_PROTOCOL_VERSION_MISMATCH",
+            Self::Protocol => "E_PROTOCOL",
+            Self::Io => "E_IO",
+            Self::ReplayMismatch => "E_REPLAY_MISMATCH",
+            Self::CliInvalidArg => "E_CLI_INVALID_ARG",
+            Self::Internal => "E_INTERNAL",
+        }
+    }
+
+    /// Get the exit code for this error code.
+    #[must_use]
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::PolicyDenied => 2,
+            Self::SandboxUnavailable => 3,
+            Self::Timeout => 4,
+            Self::AssertionFailed => 5,
+            Self::ProcessExit => 6,
+            Self::TerminalParse => 7,
+            Self::ProtocolVersionMismatch => 8,
+            Self::Protocol => 9,
+            Self::Io => 10,
+            Self::ReplayMismatch => 11,
+            Self::CliInvalidArg => 12,
+            Self::Internal => 1,
+        }
+    }
+
+    /// Parse an error code from its string representation.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "E_POLICY_DENIED" => Some(Self::PolicyDenied),
+            "E_SANDBOX_UNAVAILABLE" => Some(Self::SandboxUnavailable),
+            "E_TIMEOUT" => Some(Self::Timeout),
+            "E_ASSERTION_FAILED" => Some(Self::AssertionFailed),
+            "E_PROCESS_EXIT" => Some(Self::ProcessExit),
+            "E_TERMINAL_PARSE" => Some(Self::TerminalParse),
+            "E_PROTOCOL_VERSION_MISMATCH" => Some(Self::ProtocolVersionMismatch),
+            "E_PROTOCOL" => Some(Self::Protocol),
+            "E_IO" => Some(Self::Io),
+            "E_REPLAY_MISMATCH" => Some(Self::ReplayMismatch),
+            "E_CLI_INVALID_ARG" => Some(Self::CliInvalidArg),
+            "E_INTERNAL" => Some(Self::Internal),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
 
 /// Error type for runner operations with stable error codes.
 ///
@@ -39,69 +155,125 @@ pub type RunnerResult<T> = Result<T, RunnerError>;
 /// - `E_IO` (exit 10): I/O failure
 #[derive(Debug)]
 pub struct RunnerError {
-    /// Stable error code (e.g., `E_POLICY_DENIED`).
-    pub code: String,
+    /// Stable error code.
+    pub code: ErrorCode,
     /// Human-readable error message.
     pub message: String,
     /// Structured context for debugging.
     pub context: Option<Value>,
+    /// Source error for error chaining.
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
 impl RunnerError {
-    /// Create a policy denied error.
+    /// Create a new error with the given code and message.
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            context: None,
+            source: None,
+        }
+    }
+
+    /// Create a new error with context.
+    pub fn with_context(code: ErrorCode, message: impl Into<String>, context: Value) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            context: Some(context),
+            source: None,
+        }
+    }
+
+    /// Create a new error with a source error.
+    pub fn with_source(
+        code: ErrorCode,
+        message: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            context: Some(serde_json::json!({ "source": source.to_string() })),
+            source: Some(Box::new(source)),
+        }
+    }
+
+    /// Create a policy denied error (legacy API, kept for compatibility).
     pub fn policy_denied(
-        code: impl Into<String>,
+        _code: impl Into<String>,
         message: impl Into<String>,
         context: impl Into<Option<Value>>,
     ) -> Self {
         Self {
-            code: code.into(),
+            code: ErrorCode::PolicyDenied,
             message: message.into(),
             context: context.into(),
+            source: None,
         }
     }
 
-    /// Create a timeout error (budget exceeded).
+    /// Create a timeout error (budget exceeded, legacy API).
     pub fn timeout(
-        code: impl Into<String>,
+        _code: impl Into<String>,
         message: impl Into<String>,
         context: impl Into<Option<Value>>,
     ) -> Self {
         Self {
-            code: code.into(),
+            code: ErrorCode::Timeout,
             message: message.into(),
             context: context.into(),
+            source: None,
         }
     }
 
-    /// Create a protocol error (invalid JSON or version mismatch).
+    /// Create a protocol error (invalid JSON or version mismatch, legacy API).
     pub fn protocol(
-        code: impl Into<String>,
+        _code: impl Into<String>,
         message: impl Into<String>,
         context: impl Into<Option<Value>>,
     ) -> Self {
         Self {
-            code: code.into(),
+            code: ErrorCode::Protocol,
             message: message.into(),
             context: context.into(),
+            source: None,
         }
     }
 
-    /// Create an I/O error.
+    /// Create an I/O error (legacy API).
     pub fn io(
-        code: impl Into<String>,
+        _code: impl Into<String>,
         message: impl Into<String>,
         err: impl std::fmt::Display,
     ) -> Self {
         Self {
-            code: code.into(),
+            code: ErrorCode::Io,
             message: message.into(),
             context: Some(serde_json::json!({ "source": err.to_string() })),
+            source: None,
         }
     }
 
+    /// Create an I/O error with proper error chaining.
+    ///
+    /// This preserves the source error for use with `std::error::Error::source()`.
+    pub fn io_err<E>(message: impl Into<String>, err: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self {
+            code: ErrorCode::Io,
+            message: message.into(),
+            context: Some(serde_json::json!({ "source": err.to_string() })),
+            source: Some(Box::new(err)),
+        }
+    }
+
+    /// Create a terminal parse error (legacy API).
     pub fn terminal_parse(
-        code: impl Into<String>,
+        _code: impl Into<String>,
         message: impl Into<String>,
         err: impl std::fmt::Display,
         valid_up_to: Option<usize>,
@@ -112,31 +284,93 @@ impl RunnerError {
             context.insert("valid_up_to".to_string(), Value::Number(valid_up_to.into()));
         }
         Self {
-            code: code.into(),
+            code: ErrorCode::TerminalParse,
             message: message.into(),
             context: Some(Value::Object(context)),
+            source: None,
         }
     }
 
-    pub fn internal(code: impl Into<String>, message: impl Into<String>) -> Self {
+    /// Create an internal error (legacy API).
+    pub fn internal(_code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
-            code: code.into(),
+            code: ErrorCode::Internal,
             message: message.into(),
             context: None,
+            source: None,
         }
     }
 
-    pub fn process_exit(code: impl Into<String>, message: impl Into<String>) -> Self {
+    /// Create a process exit error (legacy API).
+    pub fn process_exit(_code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
-            code: code.into(),
+            code: ErrorCode::ProcessExit,
             message: message.into(),
             context: None,
+            source: None,
         }
     }
 
+    /// Create a sandbox unavailable error.
+    pub fn sandbox_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            code: ErrorCode::SandboxUnavailable,
+            message: message.into(),
+            context: None,
+            source: None,
+        }
+    }
+
+    /// Create an assertion failed error.
+    pub fn assertion_failed(message: impl Into<String>, context: impl Into<Option<Value>>) -> Self {
+        Self {
+            code: ErrorCode::AssertionFailed,
+            message: message.into(),
+            context: context.into(),
+            source: None,
+        }
+    }
+
+    /// Create a replay mismatch error.
+    pub fn replay_mismatch(message: impl Into<String>, context: impl Into<Option<Value>>) -> Self {
+        Self {
+            code: ErrorCode::ReplayMismatch,
+            message: message.into(),
+            context: context.into(),
+            source: None,
+        }
+    }
+
+    /// Create a CLI invalid argument error.
+    pub fn cli_invalid_arg(message: impl Into<String>) -> Self {
+        Self {
+            code: ErrorCode::CliInvalidArg,
+            message: message.into(),
+            context: None,
+            source: None,
+        }
+    }
+
+    /// Create a protocol version mismatch error.
+    pub fn protocol_version_mismatch(message: impl Into<String>) -> Self {
+        Self {
+            code: ErrorCode::ProtocolVersionMismatch,
+            message: message.into(),
+            context: None,
+            source: None,
+        }
+    }
+
+    /// Get the exit code for this error.
+    #[must_use]
+    pub fn exit_code(&self) -> i32 {
+        self.code.exit_code()
+    }
+
+    /// Convert to the stable `ErrorInfo` type for serialization.
     pub fn to_error_info(&self) -> crate::model::ErrorInfo {
         crate::model::ErrorInfo {
-            code: self.code.clone(),
+            code: self.code.as_str().to_string(),
             message: self.message.clone(),
             context: self.context.clone(),
         }
@@ -151,7 +385,9 @@ impl fmt::Display for RunnerError {
 
 impl std::error::Error for RunnerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
+        self.source
+            .as_ref()
+            .map(|e| e.as_ref() as &(dyn std::error::Error + 'static))
     }
 }
 
@@ -230,13 +466,14 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
     let mut artifacts: Option<ArtifactsWriter> = None;
 
     let mut policy_for_error: Option<Policy> = None;
-    let mut cleanup_path: Option<PathBuf> = None;
+    // RAII guard for sandbox profile cleanup - ensures cleanup even on panic
+    let mut cleanup_guard = SandboxCleanupGuard::new(None);
 
     let result: RunnerResult<RunResult> = (|| {
         let policy = load_policy_ref(&scenario.run.policy)?;
         policy_for_error = Some(policy.clone());
 
-        validate_fs_policy(&policy.fs, policy.fs_write_unsafe_ack)?;
+        validate_fs_policy(&policy.fs)?;
         validate_artifacts_policy(&policy)?;
 
         let artifacts_config = resolve_artifacts_config(&policy, options.artifacts);
@@ -291,7 +528,7 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
             artifacts_dir.as_ref(),
             run_id,
         )?;
-        cleanup_path = spawn.cleanup_path.clone();
+        cleanup_guard.path = spawn.cleanup_path.clone();
 
         let session_config = SessionConfig {
             command: spawn.command,
@@ -373,7 +610,7 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                 let observation = match observation {
                     Ok(obs) => obs,
                     Err(err) => {
-                        if err.code == "E_TIMEOUT" {
+                        if err.code == ErrorCode::Timeout {
                             last_error = Some(with_step_timeout_context(err, step));
                         } else {
                             last_error = Some(err);
@@ -447,8 +684,7 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                     last_error = None;
                     break;
                 } else {
-                    last_error = Some(RunnerError::policy_denied(
-                        "E_ASSERTION_FAILED",
+                    last_error = Some(RunnerError::assertion_failed(
                         "one or more assertions failed",
                         None,
                     ));
@@ -660,7 +896,8 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
         }
     }
 
-    cleanup_sandbox(cleanup_path);
+    // cleanup_guard will be dropped here, cleaning up sandbox profile if any
+    drop(cleanup_guard);
 
     result
 }
@@ -702,10 +939,11 @@ pub fn run_exec_with_options(
     let run_started = Instant::now();
     let mut artifacts: Option<ArtifactsWriter> = None;
 
-    let mut cleanup_path: Option<PathBuf> = None;
+    // RAII guard for sandbox profile cleanup - ensures cleanup even on panic
+    let mut cleanup_guard = SandboxCleanupGuard::new(None);
 
     let result: RunnerResult<RunResult> = (|| {
-        validate_fs_policy(&policy.fs, policy.fs_write_unsafe_ack)?;
+        validate_fs_policy(&policy.fs)?;
         validate_artifacts_policy(&policy)?;
 
         let artifacts_config = resolve_artifacts_config(&policy, options.artifacts);
@@ -743,7 +981,7 @@ pub fn run_exec_with_options(
         }
 
         let spawn = build_spawn_command(&policy, &command, &args, artifacts_dir.as_ref(), run_id)?;
-        cleanup_path = spawn.cleanup_path.clone();
+        cleanup_guard.path = spawn.cleanup_path.clone();
 
         let mut session = Session::spawn(SessionConfig {
             command: spawn.command,
@@ -766,6 +1004,14 @@ pub fn run_exec_with_options(
 
         let exit_status = loop {
             if let Some(status) = session.wait_for_exit(Duration::from_millis(0))? {
+                // Capture final observation after exit to ensure complete terminal state.
+                // There may be output buffered between our last observe and the exit.
+                let observation = session.observe(Duration::from_millis(10))?;
+                if let Some(writer) = artifacts.as_mut() {
+                    writer.write_observation(&observation)?;
+                }
+                final_observation = observation;
+
                 // Exit codes are typically 0-255, safe to cast
                 #[allow(clippy::cast_possible_wrap)]
                 let code = status.exit_code() as i32;
@@ -798,7 +1044,13 @@ pub fn run_exec_with_options(
             if let Some(writer) = artifacts.as_mut() {
                 writer.write_observation(&observation)?;
             }
-            final_observation = observation;
+            // Track the latest observation state. The final assignment before exit
+            // is overwritten by the post-exit observation, but intermediate values
+            // are used if we continue looping before the process exits.
+            #[allow(unused_assignments)]
+            {
+                final_observation = observation;
+            }
         };
 
         let ended_at = elapsed_ms(&run_started);
@@ -881,17 +1133,18 @@ pub fn run_exec_with_options(
         }
     }
 
-    cleanup_sandbox(cleanup_path);
+    // cleanup_guard will be dropped here, cleaning up sandbox profile if any
+    drop(cleanup_guard);
 
     result
 }
 
 fn validate_policy(policy: &Policy) -> RunnerResult<()> {
     validate_policy_version(policy)?;
-    validate_sandbox_mode(&policy.sandbox, policy.sandbox_unsafe_ack)?;
+    validate_sandbox_mode(&policy.sandbox)?;
     validate_network_policy(policy)?;
     validate_env_policy(&policy.env)?;
-    validate_fs_policy(&policy.fs, policy.fs_write_unsafe_ack)?;
+    validate_fs_policy(&policy.fs)?;
     validate_artifacts_policy(policy)?;
     validate_write_access(policy, None)?;
     Ok(())
@@ -987,10 +1240,7 @@ fn wait_for_condition(
             .get("pattern")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        Some(
-            regex::Regex::new(pattern)
-                .map_err(|_| RunnerError::protocol("E_PROTOCOL", "invalid regex", None))?,
-        )
+        Some(compile_safe_regex(pattern)?)
     } else {
         None
     };
@@ -1060,7 +1310,7 @@ fn step_context(step: &crate::model::Step, details: Option<Value>) -> Value {
 
 fn with_step_timeout_context(err: RunnerError, step: &crate::model::Step) -> RunnerError {
     let details = err.context.clone();
-    RunnerError::timeout(err.code, err.message, Some(step_context(step, details)))
+    RunnerError::with_context(err.code, err.message, step_context(step, details))
 }
 
 fn condition_satisfied(
@@ -1088,8 +1338,7 @@ fn condition_satisfied(
                     .get("pattern")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let re = regex::Regex::new(pattern)
-                    .map_err(|_| RunnerError::protocol("E_PROTOCOL", "invalid regex", None))?;
+                let re = compile_safe_regex(pattern)?;
                 Ok(re.is_match(&screen_text))
             }
         }
@@ -1212,7 +1461,7 @@ fn build_spawn_command(
                 cleanup_path: cleanup,
             })
         }
-        crate::model::policy::SandboxMode::None => Ok(SpawnCommand {
+        crate::model::policy::SandboxMode::Disabled { .. } => Ok(SpawnCommand {
             command: command.to_string(),
             args: args.to_vec(),
             cleanup_path: None,
@@ -1220,8 +1469,25 @@ fn build_spawn_command(
     }
 }
 
-fn cleanup_sandbox(path: Option<PathBuf>) {
-    if let Some(path) = path {
-        let _ = std::fs::remove_file(path);
+/// RAII guard for sandbox profile cleanup.
+///
+/// Ensures the sandbox profile file is deleted when the guard is dropped,
+/// even on panic. This prevents temporary files from accumulating.
+struct SandboxCleanupGuard {
+    path: Option<PathBuf>,
+}
+
+impl SandboxCleanupGuard {
+    /// Create a new cleanup guard for the given path.
+    fn new(path: Option<PathBuf>) -> Self {
+        Self { path }
+    }
+}
+
+impl Drop for SandboxCleanupGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }

@@ -86,24 +86,22 @@ impl CollectingProgress {
 
     /// Get collected events.
     ///
-    /// # Panics
-    /// Panics if the mutex is poisoned (indicates a prior panic during event collection).
-    #[allow(clippy::expect_used)]
+    /// If the mutex was poisoned by a prior panic, the lock is recovered
+    /// and events collected before the panic are still returned.
     pub fn events(&self) -> Vec<ProgressEvent> {
         self.events
             .lock()
-            .expect("progress mutex poisoned - prior panic during event collection")
+            .unwrap_or_else(|poison| poison.into_inner())
             .clone()
     }
 }
 
 #[cfg(test)]
 impl ProgressCallback for CollectingProgress {
-    #[allow(clippy::expect_used)]
     fn on_progress(&self, event: &ProgressEvent) {
         self.events
             .lock()
-            .expect("progress mutex poisoned")
+            .unwrap_or_else(|poison| poison.into_inner())
             .push(event.clone());
     }
 }

@@ -1,14 +1,104 @@
+//! Replay comparison and deterministic test verification.
+//!
+//! This module provides functionality to re-run scenarios from saved artifacts
+//! and compare the results against the original baseline. It supports configurable
+//! normalization to handle non-deterministic values like timestamps and IDs.
+//!
+//! # Key Types
+//!
+//! - [`ReplayOptions`] - Configuration for replay comparison behavior
+//! - [`ReplaySummary`] - Summary of replay comparison results
+//! - [`ReplayMismatch`] - Details about what differed between runs
+//! - [`ReplayDiff`] - Detailed diff information for failed comparisons
+//! - [`ReplayExplanation`] - Explains what normalization will be applied
+//!
+//! # Key Functions
+//!
+//! - [`replay_artifacts`] - Re-run a scenario and compare against baseline
+//! - [`explain_replay`] - Preview normalization settings without running
+//! - [`read_replay_report`] - Read results from a previous replay
+//!
+//! # Normalization
+//!
+//! Replay comparison supports filtering out non-deterministic values:
+//! - `SnapshotId` - Unique snapshot identifiers
+//! - `RunId` - Run execution identifiers
+//! - `SessionId` - PTY session identifiers
+//! - `RunTimestamps` - Start/end timestamps on runs
+//! - `StepTimestamps` - Timestamps on individual steps
+//! - `ObservationTimestamp` - Timestamps in observations
+//!
+//! Custom regex-based normalization rules can also be applied to
+//! transcript content and snapshot lines.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use tui_use::replay::{replay_artifacts, ReplayOptions};
+//! use std::path::Path;
+//!
+//! # fn example() -> Result<(), tui_use::runner::RunnerError> {
+//! // Replay with default normalization (filters timestamps and IDs)
+//! let result = replay_artifacts(
+//!     Path::new("/path/to/baseline/artifacts"),
+//!     ReplayOptions::default(),
+//! )?;
+//!
+//! // Strict replay - no normalization, exact match required
+//! let strict_result = replay_artifacts(
+//!     Path::new("/path/to/baseline/artifacts"),
+//!     ReplayOptions { strict: true, ..Default::default() },
+//! )?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Artifacts Structure
+//!
+//! Replay expects a baseline artifacts directory containing:
+//! - `scenario.json` - The original scenario definition
+//! - `policy.json` - The policy used for the run
+//! - `snapshots/` - Directory of screen snapshots
+//! - `transcript.log` - Raw terminal output
+//! - `run.json` - Run result summary
+//! - `events.jsonl` - Event stream (optional)
+//! - `checksums.json` - File integrity checksums (optional)
+
 use crate::artifacts::ArtifactsWriterConfig;
 use crate::model::{
     NormalizationFilter, NormalizationRecord, NormalizationRule, NormalizationRuleTarget,
     NormalizationSource, RunId, RunResult, ScreenSnapshot, NORMALIZATION_VERSION,
 };
-use crate::runner::{run_scenario, RunnerError, RunnerOptions, RunnerResult};
+use crate::runner::{compile_safe_regex, run_scenario, RunnerError, RunnerOptions, RunnerResult};
 use crate::scenario::load_scenario_file;
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+// =============================================================================
+// File I/O Helpers
+// =============================================================================
+
+/// Load and parse a JSON file with consistent error handling.
+fn load_json_file<T: DeserializeOwned>(path: &Path, file_type: &str) -> RunnerResult<T> {
+    let data = fs::read_to_string(path)
+        .map_err(|err| RunnerError::io("E_IO", format!("failed to read {file_type}"), err))?;
+    serde_json::from_str(&data)
+        .map_err(|err| RunnerError::io("E_PROTOCOL", format!("failed to parse {file_type}"), err))
+}
+
+/// Load and parse a JSON file if it exists, returning None if missing.
+fn load_json_file_optional<T: DeserializeOwned>(
+    path: &Path,
+    file_type: &str,
+) -> RunnerResult<Option<T>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    load_json_file(path, file_type).map(Some)
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct ReplayOptions {
@@ -83,22 +173,9 @@ pub fn explain_replay(
 
 pub fn read_replay_report(artifacts_dir: &Path) -> RunnerResult<ReplayReport> {
     let replay_dir = latest_replay_dir(artifacts_dir)?;
-    let replay_path = replay_dir.join("replay.json");
-    let replay_data = fs::read_to_string(&replay_path)
-        .map_err(|err| RunnerError::io("E_IO", "failed to read replay.json", err))?;
-    let replay_value: Value = serde_json::from_str(&replay_data)
-        .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to parse replay.json", err))?;
-    let diff_path = replay_dir.join("diff.json");
-    let diff_value = if diff_path.exists() {
-        let diff_data = fs::read_to_string(&diff_path)
-            .map_err(|err| RunnerError::io("E_IO", "failed to read diff.json", err))?;
-        Some(
-            serde_json::from_str(&diff_data)
-                .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to parse diff.json", err))?,
-        )
-    } else {
-        None
-    };
+    let replay_value: Value = load_json_file(&replay_dir.join("replay.json"), "replay.json")?;
+    let diff_value: Option<Value> =
+        load_json_file_optional(&replay_dir.join("diff.json"), "diff.json")?;
     Ok(ReplayReport {
         replay: replay_value,
         diff: diff_value,
@@ -151,8 +228,7 @@ pub fn replay_artifacts(artifacts_dir: &Path, options: ReplayOptions) -> RunnerR
             let original_events = artifacts_dir.join("events.jsonl");
             let replay_events = replay_dir.join("events.jsonl");
             if !original_events.exists() || !replay_events.exists() {
-                return Err(RunnerError::policy_denied(
-                    "E_REPLAY_MISMATCH",
+                return Err(RunnerError::replay_mismatch(
                     "event stream missing",
                     serde_json::json!({ "kind": "events" }),
                 ));
@@ -243,11 +319,7 @@ fn load_policy_from_artifacts(artifacts_dir: &Path) -> RunnerResult<crate::model
             "missing policy",
         ));
     }
-    let policy_data = fs::read_to_string(&policy_path)
-        .map_err(|err| RunnerError::io("E_IO", "failed to read policy", err))?;
-    let policy: crate::model::policy::Policy = serde_json::from_str(&policy_data)
-        .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to parse policy", err))?;
-    Ok(policy)
+    load_json_file(&policy_path, "policy.json")
 }
 
 fn resolve_replay_settings(
@@ -338,7 +410,7 @@ fn write_replay_diff(dir: &Path, err: &RunnerError) -> RunnerResult<()> {
             .as_ref()
             .map_or_else(|| "unknown".to_string(), |value| value.kind.clone()),
         index: mismatch.and_then(|value| value.index),
-        code: err.code.clone(),
+        code: err.code.as_str().to_string(),
         message: err.message.clone(),
         context: err.context.clone(),
     };
@@ -364,10 +436,7 @@ fn load_snapshots(
 
     let mut snapshots = Vec::new();
     for path in entries {
-        let data = fs::read_to_string(&path)
-            .map_err(|err| RunnerError::io("E_IO", "failed to read snapshot", err))?;
-        let snapshot: ScreenSnapshot = serde_json::from_str(&data)
-            .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to parse snapshot", err))?;
+        let snapshot: ScreenSnapshot = load_json_file(&path, "snapshot")?;
         let value = serde_json::to_value(snapshot)
             .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to serialize snapshot", err))?;
         let value = if has_filter(filters, NormalizationFilter::SnapshotId) {
@@ -396,7 +465,7 @@ fn apply_rules_to_text(
         if rule.target != target {
             continue;
         }
-        if let Ok(re) = regex::Regex::new(&rule.pattern) {
+        if let Ok(re) = compile_safe_regex(&rule.pattern) {
             text = re.replace_all(&text, rule.replace.as_str()).to_string();
         }
     }
@@ -430,28 +499,13 @@ fn apply_rules_to_snapshot_object(
 }
 
 fn compare_snapshots(original: &[Value], replay: &[Value]) -> RunnerResult<()> {
-    if original.len() != replay.len() {
-        return Err(RunnerError::policy_denied(
-            "E_REPLAY_MISMATCH",
-            "snapshot count mismatch",
-            serde_json::json!({
-                "kind": "snapshot",
-                "expected": original.len(),
-                "actual": replay.len()
-            }),
-        ));
-    }
-    for (idx, (left, right)) in original.iter().zip(replay.iter()).enumerate() {
-        if left != right {
-            return Err(RunnerError::policy_denied(
-                "E_REPLAY_MISMATCH",
-                "snapshot content mismatch",
-                serde_json::json!({ "kind": "snapshot", "index": idx }),
-            ));
-        }
-    }
-
-    Ok(())
+    compare_sequences(
+        original,
+        replay,
+        "snapshot",
+        "snapshot count mismatch",
+        "snapshot content mismatch",
+    )
 }
 
 fn compare_transcript(
@@ -467,8 +521,7 @@ fn compare_transcript(
         apply_rules_to_text(original_text, rules, NormalizationRuleTarget::Transcript);
     let replay_text = apply_rules_to_text(replay_text, rules, NormalizationRuleTarget::Transcript);
     if original_text != replay_text {
-        return Err(RunnerError::policy_denied(
-            "E_REPLAY_MISMATCH",
+        return Err(RunnerError::replay_mismatch(
             "transcript mismatch",
             serde_json::json!({ "kind": "transcript" }),
         ));
@@ -487,8 +540,7 @@ fn compare_run_results(
     normalize_run_value(&mut original_value, filters, rules);
     normalize_run_value(&mut replay_value, filters, rules);
     if original_value != replay_value {
-        return Err(RunnerError::policy_denied(
-            "E_REPLAY_MISMATCH",
+        return Err(RunnerError::replay_mismatch(
             "run result mismatch",
             serde_json::json!({ "kind": "run_result" }),
         ));
@@ -497,11 +549,7 @@ fn compare_run_results(
 }
 
 fn load_run_value(path: &Path) -> RunnerResult<Value> {
-    let data = fs::read_to_string(path)
-        .map_err(|err| RunnerError::io("E_IO", "failed to read run result", err))?;
-    let value: Value = serde_json::from_str(&data)
-        .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to parse run result", err))?;
-    Ok(value)
+    load_json_file(path, "run.json")
 }
 
 fn normalize_run_value(
@@ -512,13 +560,17 @@ fn normalize_run_value(
     let Some(obj) = value.as_object_mut() else {
         return;
     };
-    if has_filter(filters, NormalizationFilter::RunId) {
-        obj.remove("run_id");
-    }
-    if has_filter(filters, NormalizationFilter::RunTimestamps) {
-        obj.remove("started_at_ms");
-        obj.remove("ended_at_ms");
-    }
+
+    // Top-level run fields
+    remove_if_filtered(obj, filters, NormalizationFilter::RunId, &["run_id"]);
+    remove_if_filtered(
+        obj,
+        filters,
+        NormalizationFilter::RunTimestamps,
+        &["started_at_ms", "ended_at_ms"],
+    );
+
+    // Step timestamps
     if has_filter(filters, NormalizationFilter::StepTimestamps) {
         if let Some(steps) = obj.get_mut("steps").and_then(|val| val.as_array_mut()) {
             for step in steps {
@@ -529,19 +581,27 @@ fn normalize_run_value(
             }
         }
     }
+
+    // Final observation normalization
     if let Some(final_obs) = obj
         .get_mut("final_observation")
         .and_then(|val| val.as_object_mut())
     {
-        if has_filter(filters, NormalizationFilter::RunId) {
-            final_obs.remove("run_id");
-        }
-        if has_filter(filters, NormalizationFilter::SessionId) {
-            final_obs.remove("session_id");
-        }
-        if has_filter(filters, NormalizationFilter::ObservationTimestamp) {
-            final_obs.remove("timestamp_ms");
-        }
+        remove_if_filtered(final_obs, filters, NormalizationFilter::RunId, &["run_id"]);
+        remove_if_filtered(
+            final_obs,
+            filters,
+            NormalizationFilter::SessionId,
+            &["session_id"],
+        );
+        remove_if_filtered(
+            final_obs,
+            filters,
+            NormalizationFilter::ObservationTimestamp,
+            &["timestamp_ms"],
+        );
+
+        // Apply transcript normalization rules
         if let Some(transcript) = final_obs
             .get("transcript_delta")
             .and_then(|val| val.as_str())
@@ -553,20 +613,68 @@ fn normalize_run_value(
             );
             final_obs.insert("transcript_delta".to_string(), Value::String(normalized));
         }
+
+        // Screen normalization
         if let Some(screen) = final_obs
             .get_mut("screen")
             .and_then(|val| val.as_object_mut())
         {
-            if has_filter(filters, NormalizationFilter::SnapshotId) {
-                screen.remove("snapshot_id");
-            }
+            remove_if_filtered(
+                screen,
+                filters,
+                NormalizationFilter::SnapshotId,
+                &["snapshot_id"],
+            );
             apply_rules_to_snapshot_object(screen, rules);
         }
     }
 }
 
 fn has_filter(filters: &[NormalizationFilter], filter: NormalizationFilter) -> bool {
-    filters.iter().any(|item| item == &filter)
+    filters.contains(&filter)
+}
+
+/// Remove fields from an object if the specified filter is active.
+fn remove_if_filtered(
+    obj: &mut serde_json::Map<String, Value>,
+    filters: &[NormalizationFilter],
+    filter: NormalizationFilter,
+    fields: &[&str],
+) {
+    if filters.contains(&filter) {
+        for field in fields {
+            obj.remove(*field);
+        }
+    }
+}
+
+/// Compare two sequences element-by-element with consistent error reporting.
+fn compare_sequences<T: PartialEq>(
+    original: &[T],
+    replay: &[T],
+    kind: &str,
+    count_msg: &str,
+    content_msg: &str,
+) -> RunnerResult<()> {
+    if original.len() != replay.len() {
+        return Err(RunnerError::replay_mismatch(
+            count_msg,
+            serde_json::json!({
+                "kind": kind,
+                "expected": original.len(),
+                "actual": replay.len(),
+            }),
+        ));
+    }
+    for (idx, (left, right)) in original.iter().zip(replay.iter()).enumerate() {
+        if left != right {
+            return Err(RunnerError::replay_mismatch(
+                content_msg,
+                serde_json::json!({ "kind": kind, "index": idx }),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn compare_events(
@@ -581,43 +689,24 @@ fn compare_events(
     match (original_events, replay_events) {
         (None, None) => {
             if require {
-                return Err(RunnerError::policy_denied(
-                    "E_REPLAY_MISMATCH",
+                return Err(RunnerError::replay_mismatch(
                     "event stream missing",
                     serde_json::json!({ "kind": "events" }),
                 ));
             }
             Ok(())
         }
-        (Some(_), None) | (None, Some(_)) => Err(RunnerError::policy_denied(
-            "E_REPLAY_MISMATCH",
+        (Some(_), None) | (None, Some(_)) => Err(RunnerError::replay_mismatch(
             "event stream presence mismatch",
             serde_json::json!({ "kind": "events" }),
         )),
-        (Some(original_events), Some(replay_events)) => {
-            if original_events.len() != replay_events.len() {
-                return Err(RunnerError::policy_denied(
-                    "E_REPLAY_MISMATCH",
-                    "event stream length mismatch",
-                    serde_json::json!({
-                        "kind": "events",
-                        "expected": original_events.len(),
-                        "actual": replay_events.len(),
-                    }),
-                ));
-            }
-            for (idx, (left, right)) in original_events.iter().zip(replay_events.iter()).enumerate()
-            {
-                if left != right {
-                    return Err(RunnerError::policy_denied(
-                        "E_REPLAY_MISMATCH",
-                        "event stream mismatch",
-                        serde_json::json!({ "kind": "events", "index": idx }),
-                    ));
-                }
-            }
-            Ok(())
-        }
+        (Some(original_events), Some(replay_events)) => compare_sequences(
+            &original_events,
+            &replay_events,
+            "events",
+            "event stream length mismatch",
+            "event stream mismatch",
+        ),
     }
 }
 
@@ -651,33 +740,28 @@ fn load_events_if_present(
 
 fn validate_checksums(dir: &Path, require: bool) -> RunnerResult<()> {
     let path = dir.join("checksums.json");
-    if !path.exists() {
+    let checksums: Option<std::collections::BTreeMap<String, String>> =
+        load_json_file_optional(&path, "checksums.json")?;
+    let Some(checksums) = checksums else {
         if require {
-            return Err(RunnerError::policy_denied(
-                "E_REPLAY_MISMATCH",
+            return Err(RunnerError::replay_mismatch(
                 "checksums missing",
                 serde_json::json!({ "kind": "checksum", "path": "checksums.json" }),
             ));
         }
         return Ok(());
-    }
-    let data = fs::read_to_string(&path)
-        .map_err(|err| RunnerError::io("E_IO", "failed to read checksums", err))?;
-    let checksums: std::collections::BTreeMap<String, String> = serde_json::from_str(&data)
-        .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to parse checksums", err))?;
+    };
     for (relative, expected) in checksums {
         let file_path = dir.join(&relative);
         if !file_path.exists() {
-            return Err(RunnerError::policy_denied(
-                "E_REPLAY_MISMATCH",
+            return Err(RunnerError::replay_mismatch(
                 "checksum target missing",
                 serde_json::json!({ "kind": "checksum", "path": relative }),
             ));
         }
         let actual = compute_checksum(&file_path)?;
         if actual != expected {
-            return Err(RunnerError::policy_denied(
-                "E_REPLAY_MISMATCH",
+            return Err(RunnerError::replay_mismatch(
                 "checksum mismatch",
                 serde_json::json!({
                     "kind": "checksum",
@@ -698,13 +782,13 @@ fn compute_checksum(path: &Path) -> RunnerResult<String> {
 
 fn update_checksum_entry(dir: &Path, relative: &str) -> RunnerResult<()> {
     let path = dir.join("checksums.json");
-    if !path.exists() {
+    let Some(mut checksums) = load_json_file_optional::<std::collections::BTreeMap<String, String>>(
+        &path,
+        "checksums.json",
+    )?
+    else {
         return Ok(());
-    }
-    let data = fs::read_to_string(&path)
-        .map_err(|err| RunnerError::io("E_IO", "failed to read checksums", err))?;
-    let mut checksums: std::collections::BTreeMap<String, String> = serde_json::from_str(&data)
-        .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to parse checksums", err))?;
+    };
     let checksum = compute_checksum(&dir.join(relative))?;
     checksums.insert(relative.to_string(), checksum);
     let data = serde_json::to_vec_pretty(&checksums)
@@ -735,6 +819,8 @@ fn normalize_observation_value(
     let Some(obj) = value.as_object_mut() else {
         return;
     };
+
+    // Apply transcript normalization rules
     if let Some(transcript) = obj.get("transcript_delta").and_then(|val| val.as_str()) {
         let normalized = apply_rules_to_text(
             transcript.to_string(),
@@ -743,19 +829,30 @@ fn normalize_observation_value(
         );
         obj.insert("transcript_delta".to_string(), Value::String(normalized));
     }
-    if has_filter(filters, NormalizationFilter::RunId) {
-        obj.remove("run_id");
-    }
-    if has_filter(filters, NormalizationFilter::SessionId) {
-        obj.remove("session_id");
-    }
-    if has_filter(filters, NormalizationFilter::ObservationTimestamp) {
-        obj.remove("timestamp_ms");
-    }
+
+    // Remove filtered fields
+    remove_if_filtered(obj, filters, NormalizationFilter::RunId, &["run_id"]);
+    remove_if_filtered(
+        obj,
+        filters,
+        NormalizationFilter::SessionId,
+        &["session_id"],
+    );
+    remove_if_filtered(
+        obj,
+        filters,
+        NormalizationFilter::ObservationTimestamp,
+        &["timestamp_ms"],
+    );
+
+    // Screen normalization
     if let Some(screen) = obj.get_mut("screen").and_then(|val| val.as_object_mut()) {
-        if has_filter(filters, NormalizationFilter::SnapshotId) {
-            screen.remove("snapshot_id");
-        }
+        remove_if_filtered(
+            screen,
+            filters,
+            NormalizationFilter::SnapshotId,
+            &["snapshot_id"],
+        );
         apply_rules_to_snapshot_object(screen, rules);
     }
 }

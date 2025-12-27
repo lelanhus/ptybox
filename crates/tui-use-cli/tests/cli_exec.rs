@@ -19,8 +19,8 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tui_use::model::policy::{
-    EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy, ReplayPolicy, SandboxMode,
-    POLICY_VERSION,
+    EnvPolicy, ExecPolicy, FsPolicy, NetworkEnforcementAck, NetworkPolicy, Policy, ReplayPolicy,
+    SandboxMode, POLICY_VERSION,
 };
 use tui_use::model::{Observation, RunResult, TerminalSize};
 use tui_use::policy::PolicyExplanation;
@@ -59,17 +59,18 @@ fn read_events_transcript(dir: &Path) -> String {
 fn base_policy(work_dir: &Path, allowed_exec: Vec<String>) -> Policy {
     Policy {
         policy_version: POLICY_VERSION,
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
+        sandbox: SandboxMode::Disabled { ack: true },
         network: NetworkPolicy::Disabled,
-        network_unsafe_ack: true,
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: true,
+        },
         fs: FsPolicy {
             allowed_read: vec![work_dir.display().to_string()],
             allowed_write: Vec::new(),
             working_dir: Some(work_dir.display().to_string()),
+            write_ack: false,
+            strict_write: false,
         },
-        fs_write_unsafe_ack: false,
-        fs_strict_write: false,
         exec: ExecPolicy {
             allowed_executables: allowed_exec,
             allow_shell: false,
@@ -251,7 +252,7 @@ fn exec_filters_environment_by_allowlist() {
     policy.env.allowlist = vec!["FOO".to_string()];
     policy.env.set.insert("FOO".to_string(), "BAR".to_string());
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
     write_policy(&policy_path, &policy);
 
     let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
@@ -291,7 +292,7 @@ fn exec_invalid_utf8_returns_terminal_parse_error_and_writes_artifacts() {
 
     let mut policy = base_policy(&dir, vec!["/bin/cat".to_string()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
     write_policy(&policy_path, &policy);
 
     let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
@@ -325,7 +326,7 @@ fn exec_rejects_existing_artifacts_without_overwrite() {
 
     let mut policy = base_policy(&dir, vec!["/bin/echo".to_string()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
     write_policy(&policy_path, &policy);
 
     let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
@@ -472,7 +473,7 @@ fn exec_uses_policy_artifacts_dir_when_enabled() {
     fs::create_dir_all(&artifacts_dir).unwrap();
     let mut policy = base_policy(&dir, vec!["/bin/echo".to_string()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
     policy.artifacts.enabled = true;
     policy.artifacts.dir = Some(artifacts_dir.display().to_string());
     policy.artifacts.overwrite = true;
@@ -528,7 +529,7 @@ fn exec_network_requires_ack() {
     let dir = temp_dir("network-ack");
     let policy_path = dir.join("policy.json");
     let mut policy = base_policy(&dir, vec!["/bin/echo".to_string()]);
-    policy.network_unsafe_ack = false;
+    policy.network_enforcement.unenforced_ack = false;
     write_policy(&policy_path, &policy);
 
     let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
@@ -586,7 +587,7 @@ fn exec_timeout_writes_artifacts() {
     let artifacts_dir = dir.join("artifacts");
     let mut policy = base_policy(&dir, vec!["/bin/sleep".to_string()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
     policy.budgets.max_runtime_ms = 50;
     write_policy(&policy_path, &policy);
 
@@ -645,7 +646,7 @@ fn strict_write_cli_requires_ack_for_artifacts() {
     let mut policy = base_policy(&dir, vec!["/bin/echo".to_string()]);
     policy.fs.allowed_read = vec![dir.display().to_string()];
     policy.fs.allowed_write = Vec::new();
-    policy.fs_write_unsafe_ack = false;
+    policy.fs.write_ack = false;
     write_policy(&policy_path, &policy);
 
     let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
@@ -678,7 +679,7 @@ fn strict_write_cli_with_ack_allows_artifacts() {
     let mut policy = base_policy(&dir, vec!["/bin/echo".to_string()]);
     policy.fs.allowed_read = vec![dir.display().to_string()];
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = false;
+    policy.fs.write_ack = false;
     write_policy(&policy_path, &policy);
 
     let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))

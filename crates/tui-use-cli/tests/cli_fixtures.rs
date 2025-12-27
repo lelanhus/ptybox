@@ -29,8 +29,8 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tui_use::model::policy::{
-    EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy, ReplayPolicy, SandboxMode,
-    POLICY_VERSION,
+    EnvPolicy, ExecPolicy, FsPolicy, NetworkEnforcementAck, NetworkPolicy, Policy, ReplayPolicy,
+    SandboxMode, POLICY_VERSION,
 };
 use tui_use::model::{
     Action, ActionType, Assertion, Observation, RunResult, RunStatus, Scenario, ScenarioMetadata,
@@ -61,17 +61,18 @@ fn write_scenario(path: &Path, scenario: &Scenario) {
 fn base_policy(work_dir: &Path, allowed_exec: Vec<String>) -> Policy {
     Policy {
         policy_version: POLICY_VERSION,
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
+        sandbox: SandboxMode::Disabled { ack: true },
         network: NetworkPolicy::Disabled,
-        network_unsafe_ack: true,
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: true,
+        },
         fs: FsPolicy {
             allowed_read: vec![work_dir.display().to_string()],
             allowed_write: Vec::new(),
             working_dir: Some(work_dir.display().to_string()),
+            write_ack: false,
+            strict_write: false,
         },
-        fs_write_unsafe_ack: false,
-        fs_strict_write: false,
         exec: ExecPolicy {
             allowed_executables: allowed_exec,
             allow_shell: false,
@@ -152,7 +153,7 @@ fn unicode_fixture_produces_valid_snapshot() {
     let policy_path = dir.join("policy.json");
     let mut policy = base_policy(&dir, vec![fixture.clone()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
     write_policy(&policy_path, &policy);
 
     let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
@@ -214,7 +215,7 @@ fn unicode_fixture_box_drawing_preserved() {
     let policy_path = dir.join("policy.json");
     let mut policy = base_policy(&dir, vec![fixture.clone()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
     write_policy(&policy_path, &policy);
 
     let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
@@ -258,7 +259,7 @@ fn show_size_fixture_displays_terminal_dimensions() {
     let policy_path = dir.join("policy.json");
     let mut policy = base_policy(&dir, vec![fixture.clone()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
     write_policy(&policy_path, &policy);
 
     // Use "once" mode so fixture exits immediately after printing
@@ -453,7 +454,7 @@ fn delay_output_fixture_wait_condition() {
     let fixture = fixture_path("tui-use-delay-output");
     let mut policy = base_policy(&dir, vec![fixture.clone()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
 
     // Create a scenario that waits for the delayed output
     // Using process_exited for the final wait since the fixture exits after printing
@@ -887,7 +888,7 @@ fn scenario_resize_action() {
     let fixture = "/bin/cat".to_string();
     let mut policy = base_policy(&dir, vec![fixture.clone()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
 
     // Create a scenario that resizes the terminal and verifies via observation
     let scenario = Scenario {

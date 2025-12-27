@@ -9,29 +9,18 @@ use std::path::{Component, Path, PathBuf};
 
 /// Environment variables that could enable sandbox escape or library injection.
 /// These are blocked even if explicitly added to the allowlist.
-/// Note: On Unix, environment variables are case-sensitive, so we use exact matching.
-/// We include both uppercase and lowercase variants for common injection variables.
+/// Note: Checking is case-insensitive to prevent bypass via mixed-case variants.
 const DANGEROUS_ENV_VARS: &[&str] = &[
-    // Linux library injection (uppercase - standard)
+    // Linux library injection
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
     "LD_AUDIT",
-    // Linux library injection (lowercase - paranoid defense)
-    "ld_preload",
-    "ld_library_path",
-    "ld_audit",
-    // macOS library injection (uppercase - standard)
+    // macOS library injection
     "DYLD_INSERT_LIBRARIES",
     "DYLD_LIBRARY_PATH",
     "DYLD_FRAMEWORK_PATH",
     "DYLD_FALLBACK_LIBRARY_PATH",
     "DYLD_ROOT_PATH",
-    // macOS library injection (lowercase - paranoid defense)
-    "dyld_insert_libraries",
-    "dyld_library_path",
-    "dyld_framework_path",
-    "dyld_fallback_library_path",
-    "dyld_root_path",
     // Language paths
     "PYTHONPATH",
     "RUBYLIB",
@@ -42,6 +31,14 @@ const DANGEROUS_ENV_VARS: &[&str] = &[
     "GMON_OUT_PREFIX", // Profiling output directory
     "MALLOC_CONF",     // Memory allocator configuration
 ];
+
+/// Check if an environment variable name is in the dangerous list.
+/// Uses case-insensitive comparison to prevent bypass via mixed-case variants.
+fn is_dangerous_env_var(key: &str) -> bool {
+    DANGEROUS_ENV_VARS
+        .iter()
+        .any(|d| d.eq_ignore_ascii_case(key))
+}
 
 /// Well-known system paths that are symlinks by design.
 /// These are allowed because they are controlled by the OS and cannot be manipulated by users.
@@ -242,7 +239,7 @@ pub fn explain_policy_for_run_config(policy: &Policy, run: &RunConfig) -> Policy
     if let Err(err) = validate_policy_version(policy) {
         errors.push(err.to_error_info());
     }
-    if let Err(err) = validate_sandbox_mode(&policy.sandbox, policy.sandbox_unsafe_ack) {
+    if let Err(err) = validate_sandbox_mode(&policy.sandbox) {
         errors.push(err.to_error_info());
     }
     if let Err(err) = validate_network_policy(policy) {
@@ -251,7 +248,7 @@ pub fn explain_policy_for_run_config(policy: &Policy, run: &RunConfig) -> Policy
     if let Err(err) = validate_env_policy(&policy.env) {
         errors.push(err.to_error_info());
     }
-    if let Err(err) = validate_fs_policy(&policy.fs, policy.fs_write_unsafe_ack) {
+    if let Err(err) = validate_fs_policy(&policy.fs) {
         errors.push(err.to_error_info());
     }
     if let Err(err) = validate_artifacts_policy(policy) {
@@ -314,24 +311,28 @@ pub fn validate_shell_policy(exec: &ExecPolicy) -> Result<(), RunnerError> {
 }
 
 pub fn validate_network_policy(policy: &Policy) -> Result<(), RunnerError> {
-    if matches!(policy.network, NetworkPolicy::Enabled) && !policy.network_unsafe_ack {
-        return Err(RunnerError::policy_denied(
-            "E_POLICY_DENIED",
-            "network enabled without explicit acknowledgement",
-            serde_json::json!({
-                "network": "enabled",
-                "fix": "Set policy.network_unsafe_ack to true to acknowledge the security implications",
-                "note": "Network access allows the process to make external connections"
-            }),
-        ));
+    // Check if network is enabled without acknowledgement
+    if let NetworkPolicy::Enabled { ack } = &policy.network {
+        if !ack {
+            return Err(RunnerError::policy_denied(
+                "E_POLICY_DENIED",
+                "network enabled without explicit acknowledgement",
+                serde_json::json!({
+                    "network": "enabled",
+                    "fix": "Set network_unsafe_ack to true to acknowledge the security implications",
+                    "note": "Network access allows the process to make external connections"
+                }),
+            ));
+        }
     }
-    if matches!(policy.sandbox, SandboxMode::None) && !policy.network_unsafe_ack {
+    // Check if sandbox is disabled - network policy cannot be enforced without sandbox
+    if policy.sandbox.is_disabled() && !policy.network_enforcement.unenforced_ack {
         return Err(RunnerError::policy_denied(
             "E_POLICY_DENIED",
             "network policy cannot be enforced without sandbox",
             serde_json::json!({
-                "sandbox": "none",
-                "fix": "Set policy.network_unsafe_ack to true to acknowledge that network restrictions cannot be enforced",
+                "sandbox": "disabled",
+                "fix": "Set network_unsafe_ack to true to acknowledge that network restrictions cannot be enforced",
                 "alternative": "Use sandbox: 'seatbelt' (macOS) to enforce network restrictions"
             }),
         ));
@@ -362,13 +363,10 @@ pub fn validate_write_access(
     policy: &Policy,
     artifacts_dir: Option<&Path>,
 ) -> Result<(), RunnerError> {
-    if !policy.fs_strict_write || policy.fs_write_unsafe_ack {
+    if !policy.fs.strict_write || policy.fs.write_ack {
         return Ok(());
     }
-    if matches!(policy.sandbox, SandboxMode::None)
-        && artifacts_dir.is_none()
-        && !policy.artifacts.enabled
-    {
+    if policy.sandbox.is_disabled() && artifacts_dir.is_none() && !policy.artifacts.enabled {
         return Ok(());
     }
     let mut reasons = Vec::new();
@@ -391,22 +389,22 @@ pub fn validate_write_access(
     ))
 }
 
-pub fn validate_sandbox_mode(mode: &SandboxMode, unsafe_ack: bool) -> Result<(), RunnerError> {
+pub fn validate_sandbox_mode(mode: &SandboxMode) -> Result<(), RunnerError> {
     match mode {
         SandboxMode::Seatbelt => {
             crate::policy::sandbox::ensure_sandbox_available()?;
             Ok(())
         }
-        SandboxMode::None => {
-            if unsafe_ack {
+        SandboxMode::Disabled { ack } => {
+            if *ack {
                 Ok(())
             } else {
                 Err(RunnerError::policy_denied(
                     "E_POLICY_DENIED",
                     "sandbox disabled without explicit acknowledgement",
                     serde_json::json!({
-                        "sandbox": "none",
-                        "fix": "Set policy.sandbox_unsafe_ack to true to acknowledge that no sandbox will be used",
+                        "sandbox": "disabled",
+                        "fix": "Set sandbox_unsafe_ack to true to acknowledge that no sandbox will be used",
                         "note": "Without sandbox, filesystem and network policies cannot be enforced by the OS",
                         "alternative": "Use sandbox: 'seatbelt' on macOS for OS-level enforcement"
                     }),
@@ -435,10 +433,10 @@ pub fn validate_env_policy(env: &EnvPolicy) -> Result<(), RunnerError> {
 
 pub fn validate_policy(policy: &Policy) -> Result<(), RunnerError> {
     validate_policy_version(policy)?;
-    validate_sandbox_mode(&policy.sandbox, policy.sandbox_unsafe_ack)?;
+    validate_sandbox_mode(&policy.sandbox)?;
     validate_network_policy(policy)?;
     validate_env_policy(&policy.env)?;
-    validate_fs_policy(&policy.fs, policy.fs_write_unsafe_ack)?;
+    validate_fs_policy(&policy.fs)?;
     validate_artifacts_policy(policy)?;
     validate_write_access(policy, None)?;
     Ok(())
@@ -453,9 +451,8 @@ pub fn apply_env_policy(
     if env_policy.inherit {
         for key in &env_policy.allowlist {
             // Block dangerous environment variables that could enable sandbox escape.
-            // Note: Unix env vars are case-sensitive, so we use exact matching with
-            // explicit lowercase variants included in DANGEROUS_ENV_VARS.
-            if DANGEROUS_ENV_VARS.iter().any(|d| *d == key) {
+            // Uses case-insensitive comparison to prevent bypass via mixed-case variants.
+            if is_dangerous_env_var(key) {
                 return Err(RunnerError::policy_denied(
                     "E_POLICY_DENIED",
                     "dangerous environment variable blocked",
@@ -475,8 +472,8 @@ pub fn apply_env_policy(
 
     for (key, value) in &env_policy.set {
         // Block dangerous environment variables that could enable sandbox escape.
-        // Note: Unix env vars are case-sensitive, so we use exact matching.
-        if DANGEROUS_ENV_VARS.iter().any(|d| *d == key) {
+        // Uses case-insensitive comparison to prevent bypass via mixed-case variants.
+        if is_dangerous_env_var(key) {
             return Err(RunnerError::policy_denied(
                 "E_POLICY_DENIED",
                 "dangerous environment variable blocked",
@@ -497,6 +494,9 @@ pub fn apply_env_policy(
 }
 
 fn is_shell_command(command: &str, args: &[String]) -> bool {
+    // Suppress unused warning - args kept for API compatibility and potential future use
+    let _ = args;
+
     let shell_names = ["sh", "bash", "zsh", "dash", "fish", "ksh", "tcsh", "csh"];
 
     // Block shell scripts by extension
@@ -512,23 +512,20 @@ fn is_shell_command(command: &str, args: &[String]) -> bool {
         .and_then(|s| s.to_str())
         .unwrap_or(command);
 
-    // Block any invocation of a known shell
-    if shell_names.iter().any(|name| *name == base) {
-        return true;
-    }
-
-    // Check for -c flag which indicates shell command execution
-    if args.iter().any(|arg| arg == "-c") {
-        return true;
-    }
-
-    false
+    // Block any invocation of a known shell.
+    // Note: We intentionally do NOT block `-c` flag for non-shell interpreters.
+    // Python, Ruby, Perl use -c for legitimate purposes:
+    // - Python -c: execute inline code (not shell execution)
+    // - Ruby -c: syntax check only
+    // - Perl -c: compile only (syntax check)
+    // We only block shell executables themselves, not arbitrary -c usage.
+    shell_names.iter().any(|name| *name == base)
 }
 
 /// Blocked filesystem roots for security. Paths under these roots cannot be allowlisted.
 const BLOCKED_FS_ROOTS: &[&str] = &["/", "/System", "/Library", "/Users", "/private", "/Volumes"];
 
-pub fn validate_fs_policy(fs: &FsPolicy, fs_write_unsafe_ack: bool) -> Result<(), RunnerError> {
+pub fn validate_fs_policy(fs: &FsPolicy) -> Result<(), RunnerError> {
     let home_dir = std::env::var_os("HOME").map(PathBuf::from);
     let denied_roots: [(&Path, &str); 5] = [
         (Path::new("/System"), "system"),
@@ -537,13 +534,13 @@ pub fn validate_fs_policy(fs: &FsPolicy, fs_write_unsafe_ack: bool) -> Result<()
         (Path::new("/private"), "private"),
         (Path::new("/Volumes"), "volumes"),
     ];
-    if !fs.allowed_write.is_empty() && !fs_write_unsafe_ack {
+    if !fs.allowed_write.is_empty() && !fs.write_ack {
         return Err(RunnerError::policy_denied(
             "E_POLICY_DENIED",
             "write allowlist requires explicit acknowledgement",
             serde_json::json!({
                 "paths": fs.allowed_write,
-                "fix": "Set policy.fs_write_unsafe_ack to true to acknowledge write access",
+                "fix": "Set fs_write_unsafe_ack to true to acknowledge write access",
                 "note": "Write access allows the process to modify files in allowlisted paths"
             }),
         ));

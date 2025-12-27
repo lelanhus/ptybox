@@ -12,23 +12,25 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(missing_docs)]
 
-use tui_use::model::policy::{FsPolicy, NetworkPolicy, Policy, SandboxMode};
+use tui_use::model::policy::{FsPolicy, NetworkEnforcementAck, NetworkPolicy, Policy, SandboxMode};
 use tui_use::model::{RunConfig, TerminalSize};
 use tui_use::policy::explain_policy_for_run_config;
 
 #[test]
 fn explain_policy_reports_denials() {
     let policy = Policy {
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: false,
-        network: NetworkPolicy::Enabled,
-        network_unsafe_ack: false,
+        sandbox: SandboxMode::Disabled { ack: false },
+        network: NetworkPolicy::Enabled { ack: false },
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: false,
+        },
         fs: FsPolicy {
             allowed_read: vec!["/tmp".to_string()],
             allowed_write: vec!["/tmp/write".to_string()],
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         },
-        fs_write_unsafe_ack: false,
         ..Policy::default()
     };
     let run = RunConfig {

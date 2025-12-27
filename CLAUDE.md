@@ -51,8 +51,10 @@ scripts/container-smoke.sh
 
 **Run module** (primary entry points):
 ```rust
-tui_use::run::run_scenario(scenario, options) -> RunnerResult<RunResult>
+tui_use::run::run_scenario(scenario) -> RunnerResult<RunResult>
+tui_use::run::run_scenario_with_options(scenario, options) -> RunnerResult<RunResult>
 tui_use::run::run_exec(command, args, cwd, policy) -> RunnerResult<RunResult>
+tui_use::run::run_exec_with_options(command, args, cwd, policy, options) -> RunnerResult<RunResult>
 ```
 
 **Session API** (lower-level PTY control):

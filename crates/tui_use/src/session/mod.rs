@@ -1,7 +1,65 @@
 //! PTY session management for driving TUI applications.
 //!
 //! This module provides [`Session`] for spawning and interacting with
-//! terminal applications via a pseudo-terminal (PTY).
+//! terminal applications via a pseudo-terminal (PTY). It handles the
+//! low-level details of PTY creation, non-blocking I/O, terminal emulation,
+//! and process lifecycle management.
+//!
+//! # Key Types
+//!
+//! - [`Session`] - The main PTY session handle for driving a TUI application
+//! - [`SessionConfig`] - Configuration for spawning a new session
+//!
+//! # Key Operations
+//!
+//! - [`Session::spawn`] - Create a new PTY session with the given configuration
+//! - [`Session::send`] - Send actions (keys, text, resize, terminate) to the session
+//! - [`Session::observe`] - Read terminal output and capture a screen snapshot
+//! - [`Session::terminate`] - Send SIGTERM to gracefully stop the process
+//! - [`Session::terminate_process_group`] - Graceful termination with SIGKILL fallback
+//! - [`Session::close`] - Explicit cleanup with full error handling
+//!
+//! # Example
+//!
+//! ```no_run
+//! use tui_use::session::{Session, SessionConfig};
+//! use tui_use::model::{Action, ActionType, RunId, TerminalSize};
+//! use std::time::Duration;
+//!
+//! # fn example() -> Result<(), tui_use::runner::RunnerError> {
+//! // Spawn a new session
+//! let config = SessionConfig {
+//!     command: "/bin/cat".to_string(),
+//!     args: vec![],
+//!     cwd: None,
+//!     size: TerminalSize::default(),
+//!     run_id: RunId::new(),
+//!     env: Default::default(),
+//! };
+//! let mut session = Session::spawn(config)?;
+//!
+//! // Send some text input
+//! let action = Action {
+//!     action_type: ActionType::Text,
+//!     payload: serde_json::json!({"text": "hello"}),
+//! };
+//! session.send(&action)?;
+//!
+//! // Observe the terminal output
+//! let observation = session.observe(Duration::from_millis(100))?;
+//! println!("Screen: {:?}", observation.screen.lines);
+//!
+//! // Clean shutdown
+//! session.close(Duration::from_millis(500))?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Process Management
+//!
+//! Sessions automatically clean up child processes when dropped, but for
+//! proper error handling use [`Session::close`] or [`Session::terminate_process_group`]
+//! before the session goes out of scope.
 
 use crate::model::PROTOCOL_VERSION;
 use crate::model::{Action, ActionType, Observation, RunId, SessionId, TerminalSize};
@@ -18,6 +76,59 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Minimum terminal rows for resize validation.
+const MIN_TERMINAL_ROWS: u16 = 1;
+/// Maximum terminal rows for resize validation.
+const MAX_TERMINAL_ROWS: u16 = 500;
+/// Minimum terminal columns for resize validation.
+const MIN_TERMINAL_COLS: u16 = 1;
+/// Maximum terminal columns for resize validation.
+const MAX_TERMINAL_COLS: u16 = 500;
+
+// =============================================================================
+// Payload Extraction Helpers
+// =============================================================================
+
+/// Extension trait for extracting typed values from JSON payloads with consistent error handling.
+trait PayloadExt {
+    /// Extract a string field from the payload.
+    fn extract_str(&self, key: &str, context: &str) -> Result<&str, RunnerError>;
+    /// Extract a u64 field from the payload.
+    fn extract_u64(&self, key: &str, context: &str) -> Result<u64, RunnerError>;
+}
+
+impl PayloadExt for serde_json::Value {
+    fn extract_str(&self, key: &str, context: &str) -> Result<&str, RunnerError> {
+        self.get(key)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                RunnerError::protocol(
+                    "E_PROTOCOL",
+                    format!("missing or invalid '{key}' field in {context} payload"),
+                    serde_json::json!({
+                        "received_payload": self,
+                        "expected": {key: "string"},
+                    }),
+                )
+            })
+    }
+
+    fn extract_u64(&self, key: &str, context: &str) -> Result<u64, RunnerError> {
+        self.get(key)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                RunnerError::protocol(
+                    "E_PROTOCOL",
+                    format!("missing or invalid '{key}' field in {context} payload"),
+                    serde_json::json!({
+                        "received_payload": self,
+                        "expected": {key: "number"},
+                    }),
+                )
+            })
+    }
+}
 
 /// A PTY-backed session for driving a TUI application.
 ///
@@ -147,22 +258,7 @@ impl Session {
     pub fn send(&mut self, action: &Action) -> Result<(), RunnerError> {
         match action.action_type {
             ActionType::Key => {
-                let key = action
-                    .payload
-                    .get("key")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        RunnerError::protocol(
-                            "E_PROTOCOL",
-                            "missing or invalid 'key' field in key action payload",
-                            serde_json::json!({
-                                "received_payload": action.payload,
-                                "expected": {"key": "string"},
-                                "supported_keys": ["Enter", "Up", "Down", "Left", "Right", "Tab", "Escape", "Backspace", "Delete", "Home", "End", "PageUp", "PageDown", "or single character"],
-                                "example": {"type": "key", "payload": {"key": "Enter"}}
-                            }),
-                        )
-                    })?;
+                let key = action.payload.extract_str("key", "key action")?;
                 let bytes = key_to_bytes(key)?;
                 self.writer
                     .write_all(&bytes)
@@ -173,21 +269,7 @@ impl Session {
                 Ok(())
             }
             ActionType::Text => {
-                let text = action
-                    .payload
-                    .get("text")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        RunnerError::protocol(
-                            "E_PROTOCOL",
-                            "missing or invalid 'text' field in text action payload",
-                            serde_json::json!({
-                                "received_payload": action.payload,
-                                "expected": {"text": "string"},
-                                "example": {"type": "text", "payload": {"text": "hello world"}}
-                            }),
-                        )
-                    })?;
+                let text = action.payload.extract_str("text", "text action")?;
                 self.writer
                     .write_all(text.as_bytes())
                     .map_err(|err| RunnerError::io("E_IO", "failed to write text", err))?;
@@ -197,39 +279,67 @@ impl Session {
                 Ok(())
             }
             ActionType::Resize => {
-                // Terminal dimensions are always small, safe to truncate
-                #[allow(clippy::cast_possible_truncation)]
-                let rows = action
-                    .payload
-                    .get("rows")
-                    .and_then(|v| v.as_u64())
-                    .ok_or_else(|| {
-                        RunnerError::protocol(
-                            "E_PROTOCOL",
-                            "missing or invalid 'rows' field in resize action payload",
-                            serde_json::json!({
-                                "received_payload": action.payload,
-                                "expected": {"rows": "number (u16)", "cols": "number (u16)"},
-                                "example": {"type": "resize", "payload": {"rows": 24, "cols": 80}}
-                            }),
-                        )
-                    })? as u16;
-                #[allow(clippy::cast_possible_truncation)]
-                let cols = action
-                    .payload
-                    .get("cols")
-                    .and_then(|v| v.as_u64())
-                    .ok_or_else(|| {
-                        RunnerError::protocol(
-                            "E_PROTOCOL",
-                            "missing or invalid 'cols' field in resize action payload",
-                            serde_json::json!({
-                                "received_payload": action.payload,
-                                "expected": {"rows": "number (u16)", "cols": "number (u16)"},
-                                "example": {"type": "resize", "payload": {"rows": 24, "cols": 80}}
-                            }),
-                        )
-                    })? as u16;
+                let rows_u64 = action.payload.extract_u64("rows", "resize action")?;
+                let cols_u64 = action.payload.extract_u64("cols", "resize action")?;
+
+                // Validate bounds before conversion to prevent silent truncation
+                let rows = u16::try_from(rows_u64).map_err(|_| {
+                    RunnerError::protocol(
+                        "E_PROTOCOL",
+                        format!(
+                            "rows value {} exceeds maximum u16 value {}",
+                            rows_u64,
+                            u16::MAX
+                        ),
+                        serde_json::json!({
+                            "received": rows_u64,
+                            "max": u16::MAX
+                        }),
+                    )
+                })?;
+                let cols = u16::try_from(cols_u64).map_err(|_| {
+                    RunnerError::protocol(
+                        "E_PROTOCOL",
+                        format!(
+                            "cols value {} exceeds maximum u16 value {}",
+                            cols_u64,
+                            u16::MAX
+                        ),
+                        serde_json::json!({
+                            "received": cols_u64,
+                            "max": u16::MAX
+                        }),
+                    )
+                })?;
+
+                // Validate terminal size bounds to prevent memory exhaustion
+                if !(MIN_TERMINAL_ROWS..=MAX_TERMINAL_ROWS).contains(&rows) {
+                    return Err(RunnerError::protocol(
+                        "E_PROTOCOL",
+                        format!(
+                            "terminal rows must be between {MIN_TERMINAL_ROWS} and {MAX_TERMINAL_ROWS}"
+                        ),
+                        serde_json::json!({
+                            "received": rows,
+                            "min": MIN_TERMINAL_ROWS,
+                            "max": MAX_TERMINAL_ROWS
+                        }),
+                    ));
+                }
+                if !(MIN_TERMINAL_COLS..=MAX_TERMINAL_COLS).contains(&cols) {
+                    return Err(RunnerError::protocol(
+                        "E_PROTOCOL",
+                        format!(
+                            "terminal cols must be between {MIN_TERMINAL_COLS} and {MAX_TERMINAL_COLS}"
+                        ),
+                        serde_json::json!({
+                            "received": cols,
+                            "min": MIN_TERMINAL_COLS,
+                            "max": MAX_TERMINAL_COLS
+                        }),
+                    ));
+                }
+
                 self.master
                     .resize(PtySize {
                         rows,
@@ -238,10 +348,12 @@ impl Session {
                         pixel_height: 0,
                     })
                     .map_err(|err| RunnerError::io("E_IO", "failed to resize pty", err))?;
-                let mut terminal = self
-                    .terminal
-                    .lock()
-                    .map_err(|_| RunnerError::internal("E_INTERNAL", "terminal lock poisoned"))?;
+                let mut terminal = self.terminal.lock().map_err(|_| {
+                    RunnerError::internal(
+                        "E_INTERNAL",
+                        "terminal lock poisoned during resize operation",
+                    )
+                })?;
                 terminal.resize(TerminalSize { rows, cols });
                 Ok(())
             }
@@ -298,10 +410,9 @@ impl Session {
             }
         };
 
-        let mut terminal = self
-            .terminal
-            .lock()
-            .map_err(|_| RunnerError::internal("E_INTERNAL", "terminal lock poisoned"))?;
+        let mut terminal = self.terminal.lock().map_err(|_| {
+            RunnerError::internal("E_INTERNAL", "terminal lock poisoned during observation")
+        })?;
         terminal.process_bytes(&total);
         let snapshot = terminal.snapshot()?;
         Ok(Observation {
@@ -466,9 +577,63 @@ fn key_to_bytes(key: &str) -> Result<Vec<u8>, RunnerError> {
 }
 
 impl Session {
+    /// Explicitly close the session with proper error handling.
+    ///
+    /// This method provides a way to cleanly shut down the session with full
+    /// error propagation, unlike the `Drop` implementation which silently ignores
+    /// errors. The session is consumed by this method.
+    ///
+    /// Performs the following steps:
+    /// 1. Flushes any buffered output to the PTY
+    /// 2. Sends SIGTERM to the process group
+    /// 3. Waits up to the specified grace period for graceful exit
+    /// 4. Sends SIGKILL if still alive
+    ///
+    /// # Errors
+    /// - `E_IO`: Failed to flush writer, signal process, or wait for exit
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use tui_use::session::{Session, SessionConfig};
+    /// # use tui_use::model::{RunId, TerminalSize};
+    /// # use std::time::Duration;
+    /// # fn example() -> Result<(), tui_use::runner::RunnerError> {
+    /// # let config = SessionConfig {
+    /// #     command: "/bin/cat".to_string(),
+    /// #     args: vec![],
+    /// #     cwd: None,
+    /// #     size: TerminalSize::default(),
+    /// #     run_id: RunId::new(),
+    /// #     env: Default::default(),
+    /// # };
+    /// let session = Session::spawn(config)?;
+    /// // ... use session ...
+    /// session.close(Duration::from_millis(500))?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn close(
+        mut self,
+        grace: Duration,
+    ) -> Result<Option<portable_pty::ExitStatus>, RunnerError> {
+        // Flush any buffered output before terminating
+        self.writer.flush().map_err(|err| {
+            RunnerError::io("E_IO", "failed to flush pty writer during close", err)
+        })?;
+
+        // Terminate and wait for exit
+        self.terminate_process_group(grace)
+    }
+
     /// Best-effort cleanup of the child process. Used by Drop.
+    ///
     /// All errors are silently ignored since Drop cannot propagate errors.
+    /// For controlled termination with error handling, use [`close()`](Self::close)
+    /// before the Session is dropped.
     fn cleanup_process_best_effort(&mut self) {
+        // Flush any buffered output (best effort, ignore errors)
+        let _ = self.writer.flush();
+
         #[cfg(unix)]
         if let Some(pid) = self.child.process_id() {
             // Process IDs are always positive and fit in i32

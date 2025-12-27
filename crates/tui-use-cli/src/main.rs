@@ -486,13 +486,17 @@ fn emit_result(json: bool, result: Result<tui_use::model::RunResult, RunnerError
             } else {
                 eprintln!("run completed: {:?}", run_result.status);
             }
-            if matches!(run_result.status, tui_use::model::RunStatus::Failed) {
-                if let Some(err) = run_result.error.as_ref() {
-                    std::process::exit(exit_code_for_error_code(&err.code));
+            match run_result.status {
+                tui_use::model::RunStatus::Passed => Ok(()),
+                tui_use::model::RunStatus::Failed
+                | tui_use::model::RunStatus::Errored
+                | tui_use::model::RunStatus::Canceled => {
+                    if let Some(err) = run_result.error.as_ref() {
+                        std::process::exit(exit_code_for_error_code(&err.code));
+                    }
+                    std::process::exit(1);
                 }
-                std::process::exit(1);
             }
-            Ok(())
         }
         Err(err) => {
             if json {
@@ -569,7 +573,7 @@ fn run_driver(command: String, args: Vec<String>, policy: Policy) -> Result<()> 
                     "hint": "Run 'tui-use protocol-help --json' for full schema documentation"
                 });
                 emit_driver_error("E_PROTOCOL", "invalid json action", Some(context))?;
-                return Err(miette::miette!("invalid json action: {}", e));
+                std::process::exit(exit_code_for_error_code("E_PROTOCOL"));
             }
         };
         if input.protocol_version != PROTOCOL_VERSION {
@@ -581,7 +585,7 @@ fn run_driver(command: String, args: Vec<String>, policy: Policy) -> Result<()> 
                     "supported_version": PROTOCOL_VERSION
                 })),
             )?;
-            return Err(miette::miette!("protocol version mismatch"));
+            std::process::exit(exit_code_for_error_code("E_PROTOCOL_VERSION_MISMATCH"));
         }
         let action = input.action;
         session.send(&action)?;
@@ -637,23 +641,45 @@ fn apply_cli_policy_overrides(
     ack_unsafe_write: bool,
     strict_write: bool,
 ) {
+    use tui_use::model::policy::{NetworkPolicy, SandboxMode};
+
+    // Handle sandbox mode
     if no_sandbox {
-        policy.sandbox = tui_use::model::policy::SandboxMode::None;
+        // Set disabled with ack if ack_unsafe_sandbox is also set
+        policy.sandbox = SandboxMode::Disabled {
+            ack: ack_unsafe_sandbox,
+        };
+    } else if ack_unsafe_sandbox {
+        // If already disabled, update the ack
+        if let SandboxMode::Disabled { ref mut ack } = policy.sandbox {
+            *ack = true;
+        }
     }
-    if ack_unsafe_sandbox {
-        policy.sandbox_unsafe_ack = true;
-    }
+
+    // Handle network policy
     if enable_network {
-        policy.network = tui_use::model::policy::NetworkPolicy::Enabled;
+        // Set enabled with ack if ack_unsafe_network is also set
+        policy.network = NetworkPolicy::Enabled {
+            ack: ack_unsafe_network,
+        };
+    } else if ack_unsafe_network {
+        // If already enabled, update the ack
+        if let NetworkPolicy::Enabled { ref mut ack } = policy.network {
+            *ack = true;
+        }
     }
+
+    // Handle network enforcement ack (for unenforced network when sandbox disabled)
     if ack_unsafe_network {
-        policy.network_unsafe_ack = true;
+        policy.network_enforcement.unenforced_ack = true;
     }
+
+    // Handle filesystem write acknowledgement
     if ack_unsafe_write {
-        policy.fs_write_unsafe_ack = true;
+        policy.fs.write_ack = true;
     }
     if strict_write {
-        policy.fs_strict_write = true;
+        policy.fs.strict_write = true;
     }
 }
 
@@ -673,42 +699,28 @@ fn emit_explanation(json: bool, explanation: &tui_use::policy::PolicyExplanation
 }
 
 fn emit_driver_error(code: &str, message: &str, context: Option<serde_json::Value>) -> Result<()> {
-    let error = tui_use::model::ErrorInfo {
-        code: code.to_string(),
-        message: message.to_string(),
-        context,
-    };
-    let payload = serde_json::to_string(&error).into_diagnostic()?;
+    use tui_use::model::PROTOCOL_VERSION;
+    let error_response = serde_json::json!({
+        "protocol_version": PROTOCOL_VERSION,
+        "code": code,
+        "message": message,
+        "context": context,
+    });
+    let payload = serde_json::to_string(&error_response).into_diagnostic()?;
     println!("{payload}");
     Ok(())
 }
 
 fn exit_code_for_error_code(code: &str) -> i32 {
-    match code {
-        "E_POLICY_DENIED" => 2,
-        "E_SANDBOX_UNAVAILABLE" => 3,
-        "E_TIMEOUT" => 4,
-        "E_ASSERTION_FAILED" => 5,
-        "E_PROCESS_EXIT" => 6,
-        "E_TERMINAL_PARSE" => 7,
-        "E_PROTOCOL_VERSION_MISMATCH" => 8,
-        "E_PROTOCOL" => 9,
-        "E_IO" => 10,
-        "E_REPLAY_MISMATCH" => 11,
-        "E_CLI_INVALID_ARG" => 12,
-        _ => 1,
-    }
+    tui_use::runner::ErrorCode::parse(code).map_or(1, |c| c.exit_code())
 }
 
 fn emit_cli_error(json: bool, message: &str) -> Result<()> {
-    emit_result(
-        json,
-        Err(RunnerError::protocol("E_CLI_INVALID_ARG", message, None)),
-    )
+    emit_result(json, Err(RunnerError::cli_invalid_arg(message)))
 }
 
 fn exit_code_for_error(err: &RunnerError) -> i32 {
-    exit_code_for_error_code(&err.code)
+    err.exit_code()
 }
 
 fn print_protocol_help_text(help: &protocol_help::ProtocolHelp) {

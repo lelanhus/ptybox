@@ -18,8 +18,8 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tui_use::model::policy::{
-    EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy, ReplayPolicy, SandboxMode,
-    POLICY_VERSION,
+    EnvPolicy, ExecPolicy, FsPolicy, NetworkEnforcementAck, NetworkPolicy, Policy, ReplayPolicy,
+    SandboxMode, POLICY_VERSION,
 };
 use tui_use::model::{
     Action, ActionType, Assertion, RunResult, Scenario, ScenarioMetadata, Step, StepId,
@@ -50,17 +50,18 @@ fn write_scenario_yaml(path: &Path, scenario: &Scenario) {
 fn base_policy(work_dir: &Path, allowed_exec: Vec<String>) -> Policy {
     Policy {
         policy_version: POLICY_VERSION,
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
+        sandbox: SandboxMode::Disabled { ack: true },
         network: NetworkPolicy::Disabled,
-        network_unsafe_ack: true,
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: true,
+        },
         fs: FsPolicy {
             allowed_read: vec![work_dir.display().to_string()],
             allowed_write: Vec::new(),
             working_dir: Some(work_dir.display().to_string()),
+            write_ack: false,
+            strict_write: false,
         },
-        fs_write_unsafe_ack: false,
-        fs_strict_write: false,
         exec: ExecPolicy {
             allowed_executables: allowed_exec,
             allow_shell: false,
@@ -294,7 +295,7 @@ fn run_scenario_supports_resize_action() {
     let artifacts_dir = dir.join("artifacts");
     let mut policy = base_policy(&dir, vec![fixture.clone()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
 
     let scenario = Scenario {
         scenario_version: 1,
@@ -525,7 +526,7 @@ fn run_scenario_is_deterministic_for_same_inputs() {
         artifacts_a.display().to_string(),
         artifacts_b.display().to_string(),
     ];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
 
     let scenario = Scenario {
         scenario_version: 1,
@@ -693,7 +694,7 @@ fn run_writes_artifacts_on_assertion_failure() {
     let fixture = "/bin/cat".to_string();
     let mut policy = base_policy(&dir, vec![fixture.clone()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
 
     let scenario = Scenario {
         scenario_version: 1,
@@ -804,7 +805,7 @@ fn run_scenario_policy_file_writes_effective_policy() {
 
     let mut policy = base_policy(&dir, vec![fixture.clone()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
 
     let scenario = Scenario {
         scenario_version: 1,
@@ -876,7 +877,7 @@ fn artifacts_layout_is_written() {
     let fixture = "/bin/cat".to_string();
     let mut policy = base_policy(&dir, vec![fixture.clone()]);
     policy.fs.allowed_write = vec![artifacts_dir.display().to_string()];
-    policy.fs_write_unsafe_ack = true;
+    policy.fs.write_ack = true;
 
     let scenario = Scenario {
         scenario_version: 1,

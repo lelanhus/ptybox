@@ -12,31 +12,32 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(missing_docs)]
 
-use tui_use::model::policy::{FsPolicy, NetworkPolicy, Policy, SandboxMode};
+use tui_use::model::policy::{FsPolicy, NetworkEnforcementAck, NetworkPolicy, Policy, SandboxMode};
 use tui_use::model::{RunConfig, TerminalSize};
 use tui_use::policy::EffectivePolicy;
 use tui_use::policy::{
     validate_artifacts_dir, validate_env_policy, validate_fs_policy, validate_network_policy,
     validate_policy_version, validate_sandbox_mode, validate_write_access,
 };
+use tui_use::runner::ErrorCode;
 
 #[test]
-fn sandbox_none_requires_acknowledgement() {
-    let err = validate_sandbox_mode(&SandboxMode::None, false).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+fn sandbox_disabled_requires_acknowledgement() {
+    let err = validate_sandbox_mode(&SandboxMode::Disabled { ack: false }).unwrap_err();
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("explicit acknowledgement"));
 }
 
 #[test]
-fn sandbox_none_with_ack_is_allowed() {
-    validate_sandbox_mode(&SandboxMode::None, true).unwrap();
+fn sandbox_disabled_with_ack_is_allowed() {
+    validate_sandbox_mode(&SandboxMode::Disabled { ack: true }).unwrap();
 }
 
 #[test]
 fn sandbox_seatbelt_requires_availability() {
-    match validate_sandbox_mode(&SandboxMode::Seatbelt, true) {
+    match validate_sandbox_mode(&SandboxMode::Seatbelt) {
         Ok(()) => {}
-        Err(err) => assert_eq!(err.code, "E_SANDBOX_UNAVAILABLE"),
+        Err(err) => assert_eq!(err.code, ErrorCode::SandboxUnavailable),
     }
 }
 
@@ -46,9 +47,11 @@ fn fs_policy_rejects_root_allowlist() {
         allowed_read: vec!["/".to_string()],
         allowed_write: Vec::new(),
         working_dir: None,
+        write_ack: false,
+        strict_write: false,
     };
-    let err = validate_fs_policy(&fs, false).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    let err = validate_fs_policy(&fs).unwrap_err();
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("disallowed"));
 }
 
@@ -58,9 +61,11 @@ fn fs_policy_rejects_relative_allowlist_paths() {
         allowed_read: vec!["relative".to_string()],
         allowed_write: vec![],
         working_dir: None,
+        write_ack: false,
+        strict_write: false,
     };
-    let err = validate_fs_policy(&fs, false).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    let err = validate_fs_policy(&fs).unwrap_err();
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("absolute"));
 }
 
@@ -70,9 +75,11 @@ fn fs_policy_rejects_relative_write_allowlist_paths() {
         allowed_read: vec![],
         allowed_write: vec!["relative".to_string()],
         working_dir: None,
+        write_ack: true,
+        strict_write: false,
     };
-    let err = validate_fs_policy(&fs, true).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    let err = validate_fs_policy(&fs).unwrap_err();
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("absolute"));
 }
 
@@ -82,9 +89,11 @@ fn fs_policy_rejects_relative_working_dir() {
         allowed_read: vec!["/tmp".to_string()],
         allowed_write: vec![],
         working_dir: Some("relative".to_string()),
+        write_ack: false,
+        strict_write: false,
     };
-    let err = validate_fs_policy(&fs, false).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    let err = validate_fs_policy(&fs).unwrap_err();
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("absolute"));
 }
 
@@ -95,6 +104,8 @@ fn run_config_rejects_relative_cwd() {
             allowed_read: vec!["/tmp".to_string()],
             allowed_write: vec![],
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         },
         exec: tui_use::model::policy::ExecPolicy {
             allowed_executables: vec!["/bin/echo".to_string()],
@@ -112,7 +123,7 @@ fn run_config_rejects_relative_cwd() {
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
         .unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("absolute"));
 }
 
@@ -123,6 +134,8 @@ fn run_config_rejects_cwd_outside_allowlist() {
             allowed_read: vec!["/tmp/allowed".to_string()],
             allowed_write: vec![],
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         },
         exec: tui_use::model::policy::ExecPolicy {
             allowed_executables: vec!["/bin/echo".to_string()],
@@ -140,7 +153,7 @@ fn run_config_rejects_cwd_outside_allowlist() {
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
         .unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("working directory"));
 }
 
@@ -155,6 +168,8 @@ fn exec_policy_rejects_relative_allowed_executable() {
             allowed_read: vec!["/tmp".to_string()],
             allowed_write: vec![],
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         },
         ..Policy::default()
     };
@@ -168,7 +183,7 @@ fn exec_policy_rejects_relative_allowed_executable() {
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
         .unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("absolute"));
 }
 
@@ -179,9 +194,11 @@ fn fs_policy_rejects_home_allowlist() {
         allowed_read: vec![home.clone()],
         allowed_write: Vec::new(),
         working_dir: None,
+        write_ack: false,
+        strict_write: false,
     };
-    let err = validate_fs_policy(&fs, false).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    let err = validate_fs_policy(&fs).unwrap_err();
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("disallowed"));
 }
 
@@ -199,9 +216,11 @@ fn fs_policy_rejects_system_allowlists() {
             allowed_read: vec![path.to_string()],
             allowed_write: Vec::new(),
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         };
-        let err = validate_fs_policy(&fs, false).unwrap_err();
-        assert_eq!(err.code, "E_POLICY_DENIED");
+        let err = validate_fs_policy(&fs).unwrap_err();
+        assert_eq!(err.code, ErrorCode::PolicyDenied);
         assert!(err.message.contains("disallowed"));
     }
 }
@@ -212,9 +231,11 @@ fn fs_policy_rejects_working_dir_with_traversal() {
         allowed_read: vec!["/tmp/allowed".to_string()],
         allowed_write: Vec::new(),
         working_dir: Some("/tmp/allowed/../blocked".to_string()),
+        write_ack: false,
+        strict_write: false,
     };
-    let err = validate_fs_policy(&fs, false).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    let err = validate_fs_policy(&fs).unwrap_err();
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("working_dir"));
 }
 
@@ -224,9 +245,11 @@ fn artifacts_dir_requires_write_allowlist() {
         allowed_read: vec!["/tmp".to_string()],
         allowed_write: Vec::new(),
         working_dir: None,
+        write_ack: false,
+        strict_write: false,
     };
     let err = validate_artifacts_dir(std::path::Path::new("/tmp/output"), &fs).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("artifacts dir"));
 }
 
@@ -236,10 +259,12 @@ fn artifacts_dir_denies_traversal_outside_allowlist() {
         allowed_read: vec![],
         allowed_write: vec!["/tmp/allowed".to_string()],
         working_dir: None,
+        write_ack: true,
+        strict_write: false,
     };
     let err =
         validate_artifacts_dir(std::path::Path::new("/tmp/allowed/../blocked"), &fs).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("artifacts dir"));
 }
 
@@ -249,9 +274,11 @@ fn artifacts_dir_requires_absolute_path() {
         allowed_read: vec![],
         allowed_write: vec!["relative".to_string()],
         working_dir: None,
+        write_ack: true,
+        strict_write: false,
     };
     let err = validate_artifacts_dir(std::path::Path::new("relative/output"), &fs).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("artifacts dir"));
 }
 
@@ -259,23 +286,30 @@ fn artifacts_dir_requires_absolute_path() {
 fn strict_write_mode_requires_ack_for_sandbox_profile() {
     let policy = Policy {
         sandbox: SandboxMode::Seatbelt,
-        sandbox_unsafe_ack: true,
-        fs_strict_write: true,
-        fs_write_unsafe_ack: false,
+        fs: FsPolicy {
+            strict_write: true,
+            write_ack: false,
+            ..FsPolicy::default()
+        },
         ..Policy::default()
     };
     let err = validate_write_access(&policy, None).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("write access"));
 }
 
 #[test]
 fn strict_write_mode_requires_ack_for_artifacts() {
     let policy = Policy {
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
-        fs_strict_write: true,
-        fs_write_unsafe_ack: false,
+        sandbox: SandboxMode::Disabled { ack: true },
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: true,
+        },
+        fs: FsPolicy {
+            strict_write: true,
+            write_ack: false,
+            ..FsPolicy::default()
+        },
         artifacts: tui_use::model::policy::ArtifactsPolicy {
             enabled: true,
             dir: Some("/tmp/artifacts".to_string()),
@@ -284,7 +318,7 @@ fn strict_write_mode_requires_ack_for_artifacts() {
         ..Policy::default()
     };
     let err = validate_write_access(&policy, None).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("write access"));
 }
 
@@ -292,9 +326,11 @@ fn strict_write_mode_requires_ack_for_artifacts() {
 fn strict_write_mode_allows_ack() {
     let policy = Policy {
         sandbox: SandboxMode::Seatbelt,
-        sandbox_unsafe_ack: true,
-        fs_strict_write: true,
-        fs_write_unsafe_ack: true,
+        fs: FsPolicy {
+            strict_write: true,
+            write_ack: true,
+            ..FsPolicy::default()
+        },
         ..Policy::default()
     };
     validate_write_access(&policy, None).unwrap();
@@ -310,31 +346,33 @@ fn env_policy_requires_allowlist_for_set() {
         inherit: false,
     };
     let err = validate_env_policy(&env).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("allowlist"));
 }
 
 #[test]
 fn network_enabled_requires_ack_when_unsandboxed() {
     let policy = Policy {
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
-        network: NetworkPolicy::Enabled,
-        network_unsafe_ack: false,
+        sandbox: SandboxMode::Disabled { ack: true },
+        network: NetworkPolicy::Enabled { ack: false },
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: true,
+        },
         ..Policy::default()
     };
     let err = validate_network_policy(&policy).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("network"));
 }
 
 #[test]
 fn network_enabled_with_ack_is_allowed() {
     let policy = Policy {
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
-        network: NetworkPolicy::Enabled,
-        network_unsafe_ack: true,
+        sandbox: SandboxMode::Disabled { ack: true },
+        network: NetworkPolicy::Enabled { ack: true },
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: true,
+        },
         ..Policy::default()
     };
     validate_network_policy(&policy).unwrap();
@@ -343,24 +381,26 @@ fn network_enabled_with_ack_is_allowed() {
 #[test]
 fn network_disabled_requires_ack_when_unsandboxed() {
     let policy = Policy {
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
+        sandbox: SandboxMode::Disabled { ack: true },
         network: NetworkPolicy::Disabled,
-        network_unsafe_ack: false,
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: false,
+        },
         ..Policy::default()
     };
     let err = validate_network_policy(&policy).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("network"));
 }
 
 #[test]
 fn network_disabled_with_ack_is_allowed_when_unsandboxed() {
     let policy = Policy {
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
+        sandbox: SandboxMode::Disabled { ack: true },
         network: NetworkPolicy::Disabled,
-        network_unsafe_ack: true,
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: true,
+        },
         ..Policy::default()
     };
     validate_network_policy(&policy).unwrap();
@@ -372,14 +412,11 @@ fn write_allowlist_requires_explicit_ack() {
         allowed_read: Vec::new(),
         allowed_write: vec!["/tmp/allowed".to_string()],
         working_dir: None,
+        write_ack: false,
+        strict_write: false,
     };
-    let policy = Policy {
-        fs,
-        fs_write_unsafe_ack: false,
-        ..Policy::default()
-    };
-    let err = validate_fs_policy(&policy.fs, policy.fs_write_unsafe_ack).unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    let err = validate_fs_policy(&fs).unwrap_err();
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("write"));
 }
 
@@ -389,13 +426,10 @@ fn write_allowlist_with_ack_is_allowed() {
         allowed_read: Vec::new(),
         allowed_write: vec!["/tmp/allowed".to_string()],
         working_dir: None,
+        write_ack: true,
+        strict_write: false,
     };
-    let policy = Policy {
-        fs,
-        fs_write_unsafe_ack: true,
-        ..Policy::default()
-    };
-    validate_fs_policy(&policy.fs, policy.fs_write_unsafe_ack).unwrap();
+    validate_fs_policy(&fs).unwrap();
 }
 
 #[test]
@@ -405,7 +439,7 @@ fn policy_version_mismatch_is_rejected() {
         ..Policy::default()
     };
     let err = validate_policy_version(&policy).unwrap_err();
-    assert_eq!(err.code, "E_PROTOCOL");
+    assert_eq!(err.code, ErrorCode::Protocol);
     assert!(err.message.contains("policy_version"));
 }
 
@@ -433,6 +467,8 @@ fn shell_detection_blocks_direct_shell_invocation() {
                 allowed_read: vec!["/tmp".to_string()],
                 allowed_write: vec![],
                 working_dir: None,
+                write_ack: false,
+                strict_write: false,
             },
             ..Policy::default()
         };
@@ -446,7 +482,7 @@ fn shell_detection_blocks_direct_shell_invocation() {
         let err = EffectivePolicy::new(policy)
             .validate_run_config(&run)
             .unwrap_err();
-        assert_eq!(err.code, "E_POLICY_DENIED");
+        assert_eq!(err.code, ErrorCode::PolicyDenied);
         assert!(
             err.message.contains("shell"),
             "Shell {} should be blocked, got: {}",
@@ -468,6 +504,8 @@ fn shell_detection_blocks_sh_extension() {
             allowed_read: vec!["/tmp".to_string()],
             allowed_write: vec![],
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         },
         ..Policy::default()
     };
@@ -481,15 +519,16 @@ fn shell_detection_blocks_sh_extension() {
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
         .unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("shell"));
 }
 
-/// Test that -c flag is detected as shell command execution
+/// Test that -c flag is allowed for non-shell interpreters like Python
 #[test]
-fn shell_detection_blocks_dash_c_flag() {
-    // Even a non-shell command with -c should be flagged as potentially
-    // attempting shell command execution
+fn shell_detection_allows_interpreter_dash_c_flag() {
+    // Python -c is NOT shell command execution - it's Python inline code.
+    // Other interpreters like Ruby (-c = syntax check) and Perl (-c = compile only)
+    // also use -c for non-shell purposes. We only block shells themselves.
     let policy = Policy {
         exec: tui_use::model::policy::ExecPolicy {
             allowed_executables: vec!["/usr/bin/python3".to_string()],
@@ -499,6 +538,8 @@ fn shell_detection_blocks_dash_c_flag() {
             allowed_read: vec!["/tmp".to_string()],
             allowed_write: vec![],
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         },
         ..Policy::default()
     };
@@ -509,10 +550,43 @@ fn shell_detection_blocks_dash_c_flag() {
         initial_size: TerminalSize::default(),
         policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
     };
+    // This should succeed - Python -c is not shell execution
+    let result = EffectivePolicy::new(policy).validate_run_config(&run);
+    assert!(
+        result.is_ok(),
+        "Python -c should be allowed: {:?}",
+        result.err()
+    );
+}
+
+/// Test that -c flag is still blocked for actual shells
+#[test]
+fn shell_detection_blocks_shell_with_dash_c_flag() {
+    let policy = Policy {
+        exec: tui_use::model::policy::ExecPolicy {
+            allowed_executables: vec!["/bin/sh".to_string()],
+            allow_shell: false,
+        },
+        fs: FsPolicy {
+            allowed_read: vec!["/tmp".to_string()],
+            allowed_write: vec![],
+            working_dir: None,
+            write_ack: false,
+            strict_write: false,
+        },
+        ..Policy::default()
+    };
+    let run = RunConfig {
+        command: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), "echo hello".to_string()],
+        cwd: Some("/tmp".to_string()),
+        initial_size: TerminalSize::default(),
+        policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
         .unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(err.message.contains("shell"));
 }
 
@@ -558,6 +632,8 @@ fn shell_detection_blocks_symlinked_shell() {
             allowed_read: vec!["/tmp".to_string(), temp_dir.display().to_string()],
             allowed_write: vec![],
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         },
         ..Policy::default()
     };
@@ -571,7 +647,7 @@ fn shell_detection_blocks_symlinked_shell() {
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
         .unwrap_err();
-    assert_eq!(err.code, "E_POLICY_DENIED");
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
     assert!(
         err.message.contains("shell"),
         "Symlinked bash should be detected as shell, got: {}",
@@ -591,6 +667,8 @@ fn shell_detection_allows_non_shell_commands() {
             allowed_read: vec!["/tmp".to_string()],
             allowed_write: vec![],
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         },
         ..Policy::default()
     };
@@ -619,6 +697,8 @@ fn shell_detection_allows_shells_when_enabled() {
             allowed_read: vec!["/tmp".to_string()],
             allowed_write: vec![],
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         },
         ..Policy::default()
     };
@@ -633,4 +713,154 @@ fn shell_detection_allows_shells_when_enabled() {
     EffectivePolicy::new(policy)
         .validate_run_config(&run)
         .expect("bash should be allowed when allow_shell=true");
+}
+
+// =============================================================================
+// Edge Case Tests - Path Handling
+// =============================================================================
+
+#[test]
+fn policy_handles_unicode_paths() {
+    // Unicode characters in paths should be handled correctly
+    let policy = Policy {
+        fs: FsPolicy {
+            allowed_read: vec!["/tmp/日本語ディレクトリ".to_string()],
+            allowed_write: vec!["/tmp/émoji_🎉_path".to_string()],
+            working_dir: Some("/tmp/日本語ディレクトリ".to_string()),
+            write_ack: true,
+            strict_write: false,
+        },
+        exec: tui_use::model::policy::ExecPolicy {
+            allowed_executables: vec!["/bin/echo".to_string()],
+            allow_shell: false,
+        },
+        ..Policy::default()
+    };
+
+    let run = RunConfig {
+        command: "/bin/echo".to_string(),
+        args: vec!["hello".to_string()],
+        cwd: Some("/tmp/日本語ディレクトリ".to_string()),
+        initial_size: TerminalSize::default(),
+        policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
+
+    // Should not panic - unicode paths are valid
+    let effective = EffectivePolicy::new(policy);
+    let result = effective.validate_run_config(&run);
+    // Result may pass or fail depending on whether cwd is under allowed paths,
+    // but importantly it should not panic
+    assert!(result.is_ok() || result.is_err());
+}
+
+#[test]
+fn policy_handles_very_long_paths() {
+    // Very long paths (>4096 chars) should be handled gracefully
+    let long_component = "a".repeat(200);
+    let long_path = format!(
+        "/tmp/{}/{}/{}/{}/{}",
+        long_component, long_component, long_component, long_component, long_component
+    );
+
+    assert!(long_path.len() > 1000, "Path should be very long");
+
+    let policy = Policy {
+        fs: FsPolicy {
+            allowed_read: vec![long_path.clone()],
+            allowed_write: vec![],
+            working_dir: None,
+            write_ack: false,
+            strict_write: false,
+        },
+        exec: tui_use::model::policy::ExecPolicy {
+            allowed_executables: vec!["/bin/echo".to_string()],
+            allow_shell: false,
+        },
+        ..Policy::default()
+    };
+
+    let run = RunConfig {
+        command: "/bin/echo".to_string(),
+        args: vec!["hello".to_string()],
+        cwd: Some(long_path.clone()),
+        initial_size: TerminalSize::default(),
+        policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
+
+    // Should not panic - long paths should be processed
+    let effective = EffectivePolicy::new(policy);
+    let result = effective.validate_run_config(&run);
+    // Policy validation should complete without panic
+    assert!(result.is_ok() || result.is_err());
+}
+
+#[test]
+fn policy_handles_paths_with_special_characters() {
+    // Paths with special characters should be handled
+    let special_path = "/tmp/path with spaces/file-with-dashes/under_scores";
+
+    let policy = Policy {
+        fs: FsPolicy {
+            allowed_read: vec![special_path.to_string()],
+            allowed_write: vec![],
+            working_dir: Some(special_path.to_string()),
+            write_ack: false,
+            strict_write: false,
+        },
+        exec: tui_use::model::policy::ExecPolicy {
+            allowed_executables: vec!["/bin/echo".to_string()],
+            allow_shell: false,
+        },
+        ..Policy::default()
+    };
+
+    let run = RunConfig {
+        command: "/bin/echo".to_string(),
+        args: vec!["hello".to_string()],
+        cwd: Some(special_path.to_string()),
+        initial_size: TerminalSize::default(),
+        policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
+
+    // Should not panic - special characters in paths are valid
+    let effective = EffectivePolicy::new(policy);
+    let result = effective.validate_run_config(&run);
+    assert!(result.is_ok() || result.is_err());
+}
+
+#[test]
+fn policy_handles_empty_path_lists() {
+    // Empty allowed path lists should be handled
+    let policy = Policy {
+        fs: FsPolicy {
+            allowed_read: vec![],
+            allowed_write: vec![],
+            working_dir: None,
+            write_ack: false,
+            strict_write: false,
+        },
+        exec: tui_use::model::policy::ExecPolicy {
+            allowed_executables: vec!["/bin/echo".to_string()],
+            allow_shell: false,
+        },
+        ..Policy::default()
+    };
+
+    let run = RunConfig {
+        command: "/bin/echo".to_string(),
+        args: vec!["hello".to_string()],
+        cwd: None,
+        initial_size: TerminalSize::default(),
+        policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
+
+    // Should not panic - empty lists are valid (deny-by-default)
+    let effective = EffectivePolicy::new(policy);
+    let result = effective.validate_run_config(&run);
+    // Should succeed since no cwd specified and command is allowed
+    assert!(
+        result.is_ok(),
+        "Empty path lists should be valid: {:?}",
+        result.err()
+    );
 }

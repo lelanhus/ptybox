@@ -13,18 +13,25 @@ pub struct SandboxConfig {
 }
 
 /// Validates that a path is safe to embed in a Seatbelt profile.
-/// Rejects paths containing characters that could escape the S-expression string literal.
+/// Uses a whitelist approach: only allows characters known to be safe in S-expression string literals.
+/// This is more secure than a blacklist because it rejects any unknown/unexpected characters.
 fn validate_seatbelt_path(s: &str) -> Result<(), RunnerError> {
-    if s.contains('"')
-        || s.contains('(')
-        || s.contains(')')
-        || s.contains('\n')
-        || s.contains('\r')
-        || s.contains('\0')
-    {
+    // Whitelist: alphanumeric, -, _, ., /, @, space
+    // These are the only characters allowed in paths for sandbox profiles
+    let is_valid = s.chars().all(|ch| {
+        ch.is_ascii_alphanumeric()
+            || ch == '-'
+            || ch == '_'
+            || ch == '.'
+            || ch == '/'
+            || ch == '@'
+            || ch == ' '
+    });
+
+    if !is_valid {
         return Err(RunnerError::policy_denied(
             "E_POLICY_DENIED",
-            "path contains characters unsafe for sandbox profiles",
+            "path contains characters unsafe for sandbox profiles (only alphanumeric, -, _, ., /, @, space allowed)",
             Some(serde_json::json!({ "path": s })),
         ));
     }
@@ -86,7 +93,7 @@ fn build_profile(policy: &crate::model::policy::Policy) -> RunnerResult<String> 
     profile.push_str("(import \"system.sb\")\n");
     profile.push_str("(import \"bsd.sb\")\n");
 
-    if matches!(policy.network, crate::model::policy::NetworkPolicy::Enabled) {
+    if policy.network.is_enabled() {
         profile.push_str("(allow network-outbound (remote ip))\n");
     }
 

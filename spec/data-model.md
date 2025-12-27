@@ -147,6 +147,28 @@ Scenarios are deterministic “scripts” for driving TUIs.
 - `initial_size: TerminalSize` (`rows`, `cols`)
 - `policy: PolicyRef | InlinePolicy` (either reference a policy file or embed)
 
+#### PolicyRef
+Policy can be specified inline or by file reference. The untagged enum supports two formats:
+
+**Inline policy (embedded object):**
+```json
+{
+  "policy_version": 3,
+  "sandbox": "seatbelt",
+  "network": "disabled",
+  ...
+}
+```
+
+**File reference:**
+```json
+{
+  "path": "/absolute/path/to/policy.json"
+}
+```
+
+Note: File paths must be absolute. The referenced file is loaded and parsed as a `Policy` object.
+
 #### Step
 - `id: StepId`
 - `name: String`
@@ -413,7 +435,11 @@ Common flags:
 
 Replay flags:
 - `--strict` — disable normalization for exact comparison
-- `--normalize <filter>` — apply normalization filter (snapshot_id, run_id, etc.)
+- `--normalize <value>` — control normalization:
+  - `none` — disable all normalization (equivalent to `--strict`)
+  - `all` — apply all available normalization filters
+  - `<filter>` — apply specific filter (snapshot_id, run_id, run_timestamps, step_timestamps, observation_timestamp, session_id)
+  - Can be specified multiple times to combine filters
 - `--require-events` — fail if events.jsonl is missing
 - `--require-checksums` — fail if checksums.json is missing
 
@@ -428,6 +454,16 @@ Notes:
 
 #### DriverInput (NDJSON)
 Interactive driver mode reads NDJSON `DriverInput` messages from stdin and writes NDJSON `Observation`/`RunResult` to stdout.
+
+**Driver mode defaults:**
+When no explicit `--policy` is provided, driver mode uses security-first defaults:
+- `sandbox: seatbelt` (enabled by default)
+- `network: disabled` (disabled by default)
+- `fs.allowed_read: []` (no reads beyond system baseline)
+- `fs.allowed_write: []` (no writes)
+- `exec.allowed_executables: [<command>]` (only the specified command)
+
+These defaults enforce deny-by-default security. Override with `--policy <path>` or explicit flags like `--no-sandbox --ack-unsafe-sandbox`.
 
 Message format:
 - `protocol_version: u32`

@@ -16,8 +16,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use tui_use::model::policy::{
-    ArtifactsPolicy, Budgets, EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy, ReplayPolicy,
-    SandboxMode, POLICY_VERSION,
+    ArtifactsPolicy, Budgets, EnvPolicy, ExecPolicy, FsPolicy, NetworkEnforcementAck,
+    NetworkPolicy, Policy, ReplayPolicy, SandboxMode, POLICY_VERSION,
 };
 use tui_use::model::scenario::{
     Action, ActionType, PolicyRef, RunConfig, Scenario, ScenarioMetadata, Step,
@@ -34,17 +34,18 @@ fn build_scenario() -> Scenario {
     let temp_dir = std::env::temp_dir().display().to_string();
     let policy = Policy {
         policy_version: POLICY_VERSION,
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
+        sandbox: SandboxMode::Disabled { ack: true },
         network: NetworkPolicy::Disabled,
-        network_unsafe_ack: true,
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: true,
+        },
         fs: FsPolicy {
             allowed_read: vec![temp_dir],
             allowed_write: vec![],
             working_dir: None,
+            write_ack: false,
+            strict_write: false,
         },
-        fs_write_unsafe_ack: false,
-        fs_strict_write: false,
         exec: ExecPolicy {
             allowed_executables: vec!["/bin/echo".to_string()],
             allow_shell: false,

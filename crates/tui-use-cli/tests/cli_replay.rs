@@ -19,8 +19,8 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tui_use::model::policy::{
-    EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy, ReplayPolicy, SandboxMode,
-    POLICY_VERSION,
+    EnvPolicy, ExecPolicy, FsPolicy, NetworkEnforcementAck, NetworkPolicy, Policy, ReplayPolicy,
+    SandboxMode, POLICY_VERSION,
 };
 use tui_use::model::{
     Action, ActionType, Assertion, NormalizationRule, NormalizationRuleTarget, Scenario,
@@ -85,17 +85,18 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
 fn base_policy(work_dir: &Path, artifacts_dir: &Path) -> Policy {
     Policy {
         policy_version: POLICY_VERSION,
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
+        sandbox: SandboxMode::Disabled { ack: true },
         network: NetworkPolicy::Disabled,
-        network_unsafe_ack: true,
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: true,
+        },
         fs: FsPolicy {
             allowed_read: vec![work_dir.display().to_string()],
             allowed_write: vec![artifacts_dir.display().to_string()],
             working_dir: Some(work_dir.display().to_string()),
+            write_ack: true,
+            strict_write: false,
         },
-        fs_write_unsafe_ack: true,
-        fs_strict_write: false,
         exec: ExecPolicy {
             allowed_executables: vec!["/bin/cat".to_string()],
             allow_shell: false,

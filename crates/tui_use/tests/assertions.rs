@@ -71,7 +71,10 @@ fn cursor_at_fails_when_position_mismatch() {
     let msg = message.expect("Should have failure message");
     // Verify message contains cursor position info
     assert!(
-        msg.contains("cursor") || msg.contains("position") || msg.contains("row") || msg.contains("col"),
+        msg.contains("cursor")
+            || msg.contains("position")
+            || msg.contains("row")
+            || msg.contains("col"),
         "Message should mention cursor/position: {}",
         msg
     );
@@ -118,7 +121,10 @@ fn line_equals_fails_when_line_differs() {
     let msg = message.expect("Should have failure message");
     // Message should explain the mismatch (expected vs actual)
     assert!(
-        msg.contains("first line") || msg.contains("wrong text") || msg.contains("expected") || msg.contains("actual"),
+        msg.contains("first line")
+            || msg.contains("wrong text")
+            || msg.contains("expected")
+            || msg.contains("actual"),
         "Message should show expected/actual content: {}",
         msg
     );
@@ -229,7 +235,10 @@ fn not_contains_fails_when_text_present() {
     let msg = message.expect("Should have failure message");
     // Message should indicate the unexpected text was found
     assert!(
-        msg.contains("hello") || msg.contains("found") || msg.contains("present") || msg.contains("contains"),
+        msg.contains("hello")
+            || msg.contains("found")
+            || msg.contains("present")
+            || msg.contains("contains"),
         "Message should explain failure: {}",
         msg
     );
@@ -339,4 +348,224 @@ fn cursor_hidden_fails_when_visible() {
         "Message should explain failure: {}",
         msg
     );
+}
+
+// ============ screen_contains case sensitivity tests ============
+
+#[test]
+fn test_screen_contains_case_sensitive() {
+    let observation = observation_with_lines(&["Hello World"]);
+
+    // Exact case should match
+    let assertion_exact = Assertion {
+        assertion_type: "screen_contains".to_string(),
+        payload: serde_json::json!({"text": "Hello"}),
+    };
+    let (passed, message, _) = evaluate(&observation, &assertion_exact);
+    assert!(passed, "Exact case should match: {:?}", message);
+
+    // Different case should NOT match (case-sensitive)
+    let assertion_wrong_case = Assertion {
+        assertion_type: "screen_contains".to_string(),
+        payload: serde_json::json!({"text": "hello"}),
+    };
+    let (passed, message, _) = evaluate(&observation, &assertion_wrong_case);
+    assert!(
+        !passed,
+        "Different case should not match (case-sensitive search)"
+    );
+    assert!(message.is_some(), "Should have failure message");
+}
+
+// ============ screen_contains partial match tests ============
+
+#[test]
+fn test_screen_contains_partial_match() {
+    let observation = observation_with_lines(&["The quick brown fox jumps over the lazy dog"]);
+
+    // Partial substring at beginning
+    let assertion_begin = Assertion {
+        assertion_type: "screen_contains".to_string(),
+        payload: serde_json::json!({"text": "The quick"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_begin);
+    assert!(passed, "Should match partial at beginning");
+
+    // Partial substring in middle
+    let assertion_middle = Assertion {
+        assertion_type: "screen_contains".to_string(),
+        payload: serde_json::json!({"text": "brown fox"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_middle);
+    assert!(passed, "Should match partial in middle");
+
+    // Partial substring at end
+    let assertion_end = Assertion {
+        assertion_type: "screen_contains".to_string(),
+        payload: serde_json::json!({"text": "lazy dog"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_end);
+    assert!(passed, "Should match partial at end");
+
+    // Single character
+    let assertion_char = Assertion {
+        assertion_type: "screen_contains".to_string(),
+        payload: serde_json::json!({"text": "x"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_char);
+    assert!(passed, "Should match single character");
+}
+
+// ============ screen_contains unicode tests ============
+
+#[test]
+fn test_screen_contains_unicode() {
+    let observation = observation_with_lines(&["Hello World", "Bonjour le monde", "Hallo Welt"]);
+
+    // Basic unicode with accents
+    let assertion_accent = Assertion {
+        assertion_type: "screen_contains".to_string(),
+        payload: serde_json::json!({"text": "monde"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_accent);
+    assert!(passed, "Should match unicode text");
+
+    // Multi-line unicode search
+    let assertion_welt = Assertion {
+        assertion_type: "screen_contains".to_string(),
+        payload: serde_json::json!({"text": "Welt"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_welt);
+    assert!(passed, "Should find unicode on any line");
+}
+
+#[test]
+fn test_screen_contains_unicode_special_chars() {
+    let observation = observation_with_lines(&[
+        "CJK characters",
+        "Emoji test: smile",
+        "Symbols: arrows and math",
+    ]);
+
+    // Test basic ASCII in lines with unicode context
+    let assertion_symbols = Assertion {
+        assertion_type: "screen_contains".to_string(),
+        payload: serde_json::json!({"text": "Symbols"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_symbols);
+    assert!(passed, "Should match text in unicode context");
+
+    let assertion_arrows = Assertion {
+        assertion_type: "screen_contains".to_string(),
+        payload: serde_json::json!({"text": "arrows and math"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_arrows);
+    assert!(passed, "Should match multi-word substring");
+}
+
+// ============ line_equals exact vs contains tests ============
+
+#[test]
+fn test_line_equals_exact_vs_contains() {
+    let observation = observation_with_lines(&["hello world", "hello", "world"]);
+
+    // line_equals requires EXACT match
+    let assertion_exact = Assertion {
+        assertion_type: "line_equals".to_string(),
+        payload: serde_json::json!({"line": 0, "text": "hello world"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_exact);
+    assert!(passed, "Exact match should pass");
+
+    // line_equals should FAIL for partial match
+    let assertion_partial = Assertion {
+        assertion_type: "line_equals".to_string(),
+        payload: serde_json::json!({"line": 0, "text": "hello"}),
+    };
+    let (passed, message, _) = evaluate(&observation, &assertion_partial);
+    assert!(
+        !passed,
+        "Partial match should FAIL for line_equals (requires exact)"
+    );
+    assert!(message.is_some());
+
+    // line_contains should pass for partial match
+    let assertion_contains = Assertion {
+        assertion_type: "line_contains".to_string(),
+        payload: serde_json::json!({"line": 0, "text": "hello"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_contains);
+    assert!(passed, "Partial match should pass for line_contains");
+
+    // Verify line 1 exact match with "hello"
+    let assertion_line1_exact = Assertion {
+        assertion_type: "line_equals".to_string(),
+        payload: serde_json::json!({"line": 1, "text": "hello"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_line1_exact);
+    assert!(passed, "Line 1 exact match with 'hello' should pass");
+}
+
+// ============ regex_matches complex pattern tests ============
+
+#[test]
+fn test_regex_matches_complex_pattern() {
+    let observation = observation_with_lines(&[
+        "Email: user@example.com",
+        "Phone: 123-456-7890",
+        "Date: 2024-01-15",
+        "Version: v1.2.3-beta",
+    ]);
+
+    // Email pattern with capturing groups (groups not exposed but pattern should match)
+    let assertion_email = Assertion {
+        assertion_type: "regex_match".to_string(),
+        payload: serde_json::json!({"pattern": r"(\w+)@(\w+)\.(\w+)"}),
+    };
+    let (passed, message, _) = evaluate(&observation, &assertion_email);
+    assert!(
+        passed,
+        "Email regex with groups should match: {:?}",
+        message
+    );
+
+    // Phone number pattern
+    let assertion_phone = Assertion {
+        assertion_type: "regex_match".to_string(),
+        payload: serde_json::json!({"pattern": r"\d{3}-\d{3}-\d{4}"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_phone);
+    assert!(passed, "Phone number pattern should match");
+
+    // ISO date pattern with groups
+    let assertion_date = Assertion {
+        assertion_type: "regex_match".to_string(),
+        payload: serde_json::json!({"pattern": r"(\d{4})-(\d{2})-(\d{2})"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_date);
+    assert!(passed, "Date pattern with groups should match");
+
+    // Semantic version pattern
+    let assertion_version = Assertion {
+        assertion_type: "regex_match".to_string(),
+        payload: serde_json::json!({"pattern": r"v(\d+)\.(\d+)\.(\d+)(-\w+)?"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_version);
+    assert!(passed, "Semantic version pattern should match");
+
+    // Complex alternation pattern
+    let assertion_alt = Assertion {
+        assertion_type: "regex_match".to_string(),
+        payload: serde_json::json!({"pattern": r"(Email|Phone|Date|Version):"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_alt);
+    assert!(passed, "Alternation pattern should match");
+
+    // Pattern that should NOT match
+    let assertion_no_match = Assertion {
+        assertion_type: "regex_match".to_string(),
+        payload: serde_json::json!({"pattern": r"^\d{5}$"}),
+    };
+    let (passed, _, _) = evaluate(&observation, &assertion_no_match);
+    assert!(!passed, "Non-matching pattern should fail");
 }

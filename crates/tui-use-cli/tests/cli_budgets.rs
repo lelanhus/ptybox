@@ -19,8 +19,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tui_use::model::policy::{
-    Budgets, EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy, ReplayPolicy, SandboxMode,
-    POLICY_VERSION,
+    Budgets, EnvPolicy, ExecPolicy, FsPolicy, NetworkEnforcementAck, NetworkPolicy, Policy,
+    ReplayPolicy, SandboxMode, POLICY_VERSION,
 };
 use tui_use::model::{
     Action, ActionType, Assertion, RunResult, Scenario, ScenarioMetadata, Step, StepId,
@@ -81,17 +81,18 @@ fn wait_for_file(path: &Path, timeout: Duration) -> bool {
 fn base_policy(work_dir: &Path, allowed_exec: Vec<String>) -> Policy {
     Policy {
         policy_version: POLICY_VERSION,
-        sandbox: SandboxMode::None,
-        sandbox_unsafe_ack: true,
+        sandbox: SandboxMode::Disabled { ack: true },
         network: NetworkPolicy::Disabled,
-        network_unsafe_ack: true,
+        network_enforcement: NetworkEnforcementAck {
+            unenforced_ack: true,
+        },
         fs: FsPolicy {
             allowed_read: vec![work_dir.display().to_string()],
             allowed_write: Vec::new(),
             working_dir: Some(work_dir.display().to_string()),
+            write_ack: false,
+            strict_write: false,
         },
-        fs_write_unsafe_ack: false,
-        fs_strict_write: false,
         exec: ExecPolicy {
             allowed_executables: allowed_exec,
             allow_shell: false,
@@ -460,4 +461,364 @@ fn exec_timeout_kills_process_group() {
         wait_for_process_exit(pid, Duration::from_millis(500)),
         "child process should be terminated"
     );
+}
+
+// =============================================================================
+// Budget Boundary Tests
+// =============================================================================
+
+#[test]
+fn scenario_max_steps_boundary_just_below_limit() {
+    let dir = temp_dir("steps-below");
+    let policy_path = dir.join("policy.json");
+    let mut policy = base_policy(&dir, vec!["/bin/cat".to_string()]);
+    policy.budgets.max_steps = 2; // Allow 2 steps
+    write_policy(&policy_path, &policy);
+
+    let scenario = Scenario {
+        scenario_version: 1,
+        metadata: ScenarioMetadata {
+            name: "steps-below".to_string(),
+            description: None,
+        },
+        run: tui_use::model::RunConfig {
+            command: "/bin/cat".to_string(),
+            args: Vec::new(),
+            cwd: Some(dir.display().to_string()),
+            initial_size: TerminalSize::default(),
+            policy: tui_use::model::scenario::PolicyRef::File {
+                path: policy_path.display().to_string(),
+            },
+        },
+        steps: vec![Step {
+            id: StepId::new(),
+            name: "one".to_string(),
+            action: Action {
+                action_type: ActionType::Terminate,
+                payload: serde_json::json!({}),
+            },
+            assert: Vec::new(),
+            timeout_ms: 100,
+            retries: 0,
+        }],
+    };
+    let scenario_path = dir.join("scenario.json");
+    fs::write(
+        &scenario_path,
+        serde_json::to_vec_pretty(&scenario).unwrap(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
+        .args([
+            "run",
+            "--json",
+            "--scenario",
+            scenario_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    // Should succeed - 1 step is below limit of 2
+    let run: RunResult = serde_json::from_slice(&output.stdout).expect("Should parse RunResult");
+    assert!(
+        matches!(run.status, tui_use::model::RunStatus::Passed),
+        "Should pass with 1 step when limit is 2"
+    );
+}
+
+#[test]
+fn scenario_max_steps_boundary_at_limit() {
+    let dir = temp_dir("steps-at");
+    let policy_path = dir.join("policy.json");
+    let mut policy = base_policy(&dir, vec!["/bin/cat".to_string()]);
+    policy.budgets.max_steps = 1; // Allow exactly 1 step
+    write_policy(&policy_path, &policy);
+
+    let scenario = Scenario {
+        scenario_version: 1,
+        metadata: ScenarioMetadata {
+            name: "steps-at".to_string(),
+            description: None,
+        },
+        run: tui_use::model::RunConfig {
+            command: "/bin/cat".to_string(),
+            args: Vec::new(),
+            cwd: Some(dir.display().to_string()),
+            initial_size: TerminalSize::default(),
+            policy: tui_use::model::scenario::PolicyRef::File {
+                path: policy_path.display().to_string(),
+            },
+        },
+        steps: vec![Step {
+            id: StepId::new(),
+            name: "one".to_string(),
+            action: Action {
+                action_type: ActionType::Terminate,
+                payload: serde_json::json!({}),
+            },
+            assert: Vec::new(),
+            timeout_ms: 100,
+            retries: 0,
+        }],
+    };
+    let scenario_path = dir.join("scenario.json");
+    fs::write(
+        &scenario_path,
+        serde_json::to_vec_pretty(&scenario).unwrap(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
+        .args([
+            "run",
+            "--json",
+            "--scenario",
+            scenario_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    // Should succeed - exactly at limit
+    let run: RunResult = serde_json::from_slice(&output.stdout).expect("Should parse RunResult");
+    assert!(
+        matches!(run.status, tui_use::model::RunStatus::Passed),
+        "Should pass with 1 step when limit is exactly 1"
+    );
+}
+
+#[test]
+fn exec_output_budget_boundary_just_below() {
+    let dir = temp_dir("output-below");
+    let policy_path = dir.join("policy.json");
+    let mut policy = base_policy(&dir, vec!["/bin/echo".to_string()]);
+    // "hello" + newline = 6 bytes, set budget to 100 to be safe
+    policy.budgets.max_output_bytes = 100;
+    write_policy(&policy_path, &policy);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
+        .args([
+            "exec",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/echo",
+            "hello",
+        ])
+        .output()
+        .unwrap();
+
+    // Should succeed - small output within budget
+    let run: RunResult = serde_json::from_slice(&output.stdout).expect("Should parse RunResult");
+    assert!(
+        matches!(run.status, tui_use::model::RunStatus::Passed),
+        "Should pass with small output"
+    );
+}
+
+#[test]
+fn terminal_resize_boundary_at_max() {
+    let dir = temp_dir("resize-max");
+    let policy_path = dir.join("policy.json");
+    let policy = base_policy(&dir, vec!["/bin/cat".to_string()]);
+    write_policy(&policy_path, &policy);
+
+    let scenario = Scenario {
+        scenario_version: 1,
+        metadata: ScenarioMetadata {
+            name: "resize-max".to_string(),
+            description: None,
+        },
+        run: tui_use::model::RunConfig {
+            command: "/bin/cat".to_string(),
+            args: Vec::new(),
+            cwd: Some(dir.display().to_string()),
+            initial_size: TerminalSize::default(),
+            policy: tui_use::model::scenario::PolicyRef::File {
+                path: policy_path.display().to_string(),
+            },
+        },
+        steps: vec![
+            Step {
+                id: StepId::new(),
+                name: "resize-to-max".to_string(),
+                action: Action {
+                    action_type: ActionType::Resize,
+                    payload: serde_json::json!({"rows": 500, "cols": 500}),
+                },
+                assert: Vec::new(),
+                timeout_ms: 100,
+                retries: 0,
+            },
+            Step {
+                id: StepId::new(),
+                name: "terminate".to_string(),
+                action: Action {
+                    action_type: ActionType::Terminate,
+                    payload: serde_json::json!({}),
+                },
+                assert: Vec::new(),
+                timeout_ms: 100,
+                retries: 0,
+            },
+        ],
+    };
+    let scenario_path = dir.join("scenario.json");
+    fs::write(
+        &scenario_path,
+        serde_json::to_vec_pretty(&scenario).unwrap(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
+        .args([
+            "run",
+            "--json",
+            "--scenario",
+            scenario_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    // Should succeed - 500x500 is at the max boundary
+    let run: RunResult = serde_json::from_slice(&output.stdout).expect("Should parse RunResult");
+    assert!(
+        matches!(run.status, tui_use::model::RunStatus::Passed),
+        "Should pass with max terminal size"
+    );
+}
+
+#[test]
+fn terminal_resize_boundary_exceeds_max() {
+    let dir = temp_dir("resize-exceed");
+    let policy_path = dir.join("policy.json");
+    let policy = base_policy(&dir, vec!["/bin/cat".to_string()]);
+    write_policy(&policy_path, &policy);
+
+    let scenario = Scenario {
+        scenario_version: 1,
+        metadata: ScenarioMetadata {
+            name: "resize-exceed".to_string(),
+            description: None,
+        },
+        run: tui_use::model::RunConfig {
+            command: "/bin/cat".to_string(),
+            args: Vec::new(),
+            cwd: Some(dir.display().to_string()),
+            initial_size: TerminalSize::default(),
+            policy: tui_use::model::scenario::PolicyRef::File {
+                path: policy_path.display().to_string(),
+            },
+        },
+        steps: vec![Step {
+            id: StepId::new(),
+            name: "resize-too-big".to_string(),
+            action: Action {
+                action_type: ActionType::Resize,
+                payload: serde_json::json!({"rows": 501, "cols": 500}),
+            },
+            assert: Vec::new(),
+            timeout_ms: 100,
+            retries: 0,
+        }],
+    };
+    let scenario_path = dir.join("scenario.json");
+    fs::write(
+        &scenario_path,
+        serde_json::to_vec_pretty(&scenario).unwrap(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
+        .args([
+            "run",
+            "--json",
+            "--scenario",
+            scenario_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    // Should fail - 501 rows exceeds max of 500
+    if output.status.success() {
+        let run: RunResult = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            matches!(run.status, tui_use::model::RunStatus::Failed),
+            "Should fail with oversized terminal"
+        );
+        assert!(run
+            .error
+            .as_ref()
+            .is_some_and(|err| err.code == "E_PROTOCOL"));
+    } else {
+        assert_error_with_code(&output, "E_PROTOCOL", 9);
+    }
+}
+
+#[test]
+fn terminal_resize_boundary_zero_rejected() {
+    let dir = temp_dir("resize-zero");
+    let policy_path = dir.join("policy.json");
+    let policy = base_policy(&dir, vec!["/bin/cat".to_string()]);
+    write_policy(&policy_path, &policy);
+
+    let scenario = Scenario {
+        scenario_version: 1,
+        metadata: ScenarioMetadata {
+            name: "resize-zero".to_string(),
+            description: None,
+        },
+        run: tui_use::model::RunConfig {
+            command: "/bin/cat".to_string(),
+            args: Vec::new(),
+            cwd: Some(dir.display().to_string()),
+            initial_size: TerminalSize::default(),
+            policy: tui_use::model::scenario::PolicyRef::File {
+                path: policy_path.display().to_string(),
+            },
+        },
+        steps: vec![Step {
+            id: StepId::new(),
+            name: "resize-zero".to_string(),
+            action: Action {
+                action_type: ActionType::Resize,
+                payload: serde_json::json!({"rows": 0, "cols": 80}),
+            },
+            assert: Vec::new(),
+            timeout_ms: 100,
+            retries: 0,
+        }],
+    };
+    let scenario_path = dir.join("scenario.json");
+    fs::write(
+        &scenario_path,
+        serde_json::to_vec_pretty(&scenario).unwrap(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tui-use"))
+        .args([
+            "run",
+            "--json",
+            "--scenario",
+            scenario_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    // Should fail - 0 rows is below minimum
+    if output.status.success() {
+        let run: RunResult = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            matches!(run.status, tui_use::model::RunStatus::Failed),
+            "Should fail with zero rows"
+        );
+        assert!(run
+            .error
+            .as_ref()
+            .is_some_and(|err| err.code == "E_PROTOCOL"));
+    } else {
+        assert_error_with_code(&output, "E_PROTOCOL", 9);
+    }
 }

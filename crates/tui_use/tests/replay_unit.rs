@@ -20,6 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tui_use::model::{NormalizationFilter, NormalizationRuleTarget, Policy};
 use tui_use::replay::{explain_replay, ReplayOptions};
+use tui_use::runner::ErrorCode;
 
 /// Write a test policy file with optional replay configuration.
 fn write_test_policy(dir: &Path, replay_config: Option<serde_json::Value>) {
@@ -42,10 +43,19 @@ fn write_test_policy(dir: &Path, replay_config: Option<serde_json::Value>) {
 }
 
 fn temp_test_dir(name: &str) -> PathBuf {
+    // Include thread ID for test isolation when running tests in parallel
+    let thread_id = format!("{:?}", std::thread::current().id());
+    // Extract numeric part from ThreadId format "ThreadId(N)"
+    let thread_num = thread_id
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect::<String>();
+
     let dir = std::env::temp_dir().join(format!(
-        "tui-use-replay-test-{}-{}-{}",
+        "tui-use-replay-test-{}-{}-{}-{}",
         name,
         std::process::id(),
+        thread_num,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -71,7 +81,7 @@ fn explain_replay_missing_policy_fails() {
     let result = explain_replay(&dir, ReplayOptions::default());
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert_eq!(err.code, "E_IO");
+    assert_eq!(err.code, ErrorCode::Io);
     assert!(err.message.contains("policy.json"));
 
     cleanup_dir(&dir);
@@ -87,7 +97,10 @@ fn explain_replay_with_valid_policy() {
 
     let explanation = result.unwrap();
     assert!(!explanation.strict, "Default should not be strict");
-    assert!(!explanation.filters.is_empty(), "Should have default filters");
+    assert!(
+        !explanation.filters.is_empty(),
+        "Should have default filters"
+    );
 
     cleanup_dir(&dir);
 }
@@ -95,9 +108,12 @@ fn explain_replay_with_valid_policy() {
 #[test]
 fn explain_replay_strict_mode_overrides_policy() {
     let dir = temp_test_dir("explain-strict");
-    write_test_policy(&dir, Some(serde_json::json!({
-        "normalization_filters": ["snapshot_id", "run_id"]
-    })));
+    write_test_policy(
+        &dir,
+        Some(serde_json::json!({
+            "normalization_filters": ["snapshot_id", "run_id"]
+        })),
+    );
 
     let options = ReplayOptions {
         strict: true,
@@ -119,9 +135,12 @@ fn explain_replay_strict_mode_overrides_policy() {
 #[test]
 fn explain_replay_cli_filters_override_policy() {
     let dir = temp_test_dir("explain-cli-filters");
-    write_test_policy(&dir, Some(serde_json::json!({
-        "normalization_filters": ["snapshot_id", "run_id", "session_id"]
-    })));
+    write_test_policy(
+        &dir,
+        Some(serde_json::json!({
+            "normalization_filters": ["snapshot_id", "run_id", "session_id"]
+        })),
+    );
 
     let options = ReplayOptions {
         filters: Some(vec![NormalizationFilter::RunId]),
@@ -145,14 +164,20 @@ fn explain_replay_cli_filters_override_policy() {
 #[test]
 fn filter_precedence_strict_first() {
     let dir = temp_test_dir("precedence-strict");
-    write_test_policy(&dir, Some(serde_json::json!({
-        "normalization_filters": ["snapshot_id"]
-    })));
+    write_test_policy(
+        &dir,
+        Some(serde_json::json!({
+            "normalization_filters": ["snapshot_id"]
+        })),
+    );
 
     // Both strict=true and filters provided - strict wins
     let options = ReplayOptions {
         strict: true,
-        filters: Some(vec![NormalizationFilter::RunId, NormalizationFilter::SessionId]),
+        filters: Some(vec![
+            NormalizationFilter::RunId,
+            NormalizationFilter::SessionId,
+        ]),
         ..Default::default()
     };
     let result = explain_replay(&dir, options).expect("Should succeed");
@@ -166,9 +191,12 @@ fn filter_precedence_strict_first() {
 #[test]
 fn filter_precedence_cli_over_policy() {
     let dir = temp_test_dir("precedence-cli");
-    write_test_policy(&dir, Some(serde_json::json!({
-        "normalization_filters": ["snapshot_id", "run_id", "session_id"]
-    })));
+    write_test_policy(
+        &dir,
+        Some(serde_json::json!({
+            "normalization_filters": ["snapshot_id", "run_id", "session_id"]
+        })),
+    );
 
     // CLI filters should override policy
     let options = ReplayOptions {
@@ -187,10 +215,13 @@ fn filter_precedence_cli_over_policy() {
 #[test]
 fn filter_precedence_policy_strict() {
     let dir = temp_test_dir("precedence-policy-strict");
-    write_test_policy(&dir, Some(serde_json::json!({
-        "strict": true,
-        "normalization_filters": ["snapshot_id"]
-    })));
+    write_test_policy(
+        &dir,
+        Some(serde_json::json!({
+            "strict": true,
+            "normalization_filters": ["snapshot_id"]
+        })),
+    );
 
     // No CLI options - should use policy strict
     let result = explain_replay(&dir, ReplayOptions::default()).expect("Should succeed");
@@ -204,9 +235,12 @@ fn filter_precedence_policy_strict() {
 #[test]
 fn filter_precedence_policy_filters() {
     let dir = temp_test_dir("precedence-policy-filters");
-    write_test_policy(&dir, Some(serde_json::json!({
-        "normalization_filters": ["snapshot_id", "run_id"]
-    })));
+    write_test_policy(
+        &dir,
+        Some(serde_json::json!({
+            "normalization_filters": ["snapshot_id", "run_id"]
+        })),
+    );
 
     // No CLI options - should use policy filters
     let result = explain_replay(&dir, ReplayOptions::default()).expect("Should succeed");
@@ -230,10 +264,43 @@ fn filter_precedence_default_when_empty() {
     assert!(!result.strict);
     assert!(!result.filters.is_empty(), "Should have default filters");
 
-    // Default filters should include common timestamp/id filters
-    assert!(result.filters.contains(&NormalizationFilter::SnapshotId));
-    assert!(result.filters.contains(&NormalizationFilter::RunId));
-    assert!(result.filters.contains(&NormalizationFilter::SessionId));
+    // Verify the EXACT set of default filters (as defined in default_replay_filters())
+    // Default filters should be exactly these 6 filters:
+    assert_eq!(
+        result.filters.len(),
+        6,
+        "Should have exactly 6 default filters"
+    );
+
+    // Verify each specific default filter is present
+    assert!(
+        result.filters.contains(&NormalizationFilter::SnapshotId),
+        "Default filters should include SnapshotId"
+    );
+    assert!(
+        result.filters.contains(&NormalizationFilter::RunId),
+        "Default filters should include RunId"
+    );
+    assert!(
+        result.filters.contains(&NormalizationFilter::RunTimestamps),
+        "Default filters should include RunTimestamps"
+    );
+    assert!(
+        result
+            .filters
+            .contains(&NormalizationFilter::StepTimestamps),
+        "Default filters should include StepTimestamps"
+    );
+    assert!(
+        result
+            .filters
+            .contains(&NormalizationFilter::ObservationTimestamp),
+        "Default filters should include ObservationTimestamp"
+    );
+    assert!(
+        result.filters.contains(&NormalizationFilter::SessionId),
+        "Default filters should include SessionId"
+    );
 
     cleanup_dir(&dir);
 }
@@ -245,20 +312,26 @@ fn filter_precedence_default_when_empty() {
 #[test]
 fn normalization_rules_from_policy() {
     let dir = temp_test_dir("norm-rules");
-    write_test_policy(&dir, Some(serde_json::json!({
-        "normalization_rules": [
-            {
-                "target": "snapshot_lines",
-                "pattern": "\\d{4}-\\d{2}-\\d{2}",
-                "replace": "YYYY-MM-DD"
-            }
-        ]
-    })));
+    write_test_policy(
+        &dir,
+        Some(serde_json::json!({
+            "normalization_rules": [
+                {
+                    "target": "snapshot_lines",
+                    "pattern": "\\d{4}-\\d{2}-\\d{2}",
+                    "replace": "YYYY-MM-DD"
+                }
+            ]
+        })),
+    );
 
     let result = explain_replay(&dir, ReplayOptions::default()).expect("Should succeed");
 
     assert_eq!(result.rules.len(), 1);
-    assert_eq!(result.rules[0].target, NormalizationRuleTarget::SnapshotLines);
+    assert_eq!(
+        result.rules[0].target,
+        NormalizationRuleTarget::SnapshotLines
+    );
     assert_eq!(result.rules[0].pattern, "\\d{4}-\\d{2}-\\d{2}");
     assert_eq!(result.rules[0].replace, "YYYY-MM-DD");
 
@@ -304,9 +377,12 @@ fn source_tracking_cli() {
 #[test]
 fn source_tracking_policy() {
     let dir = temp_test_dir("source-policy");
-    write_test_policy(&dir, Some(serde_json::json!({
-        "normalization_filters": ["snapshot_id"]
-    })));
+    write_test_policy(
+        &dir,
+        Some(serde_json::json!({
+            "normalization_filters": ["snapshot_id"]
+        })),
+    );
 
     let result = explain_replay(&dir, ReplayOptions::default()).expect("Should succeed");
     assert_eq!(

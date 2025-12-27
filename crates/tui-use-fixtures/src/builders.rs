@@ -24,8 +24,8 @@
 use std::path::Path;
 
 use tui_use::model::policy::{
-    ArtifactsPolicy, Budgets, EnvPolicy, ExecPolicy, FsPolicy, NetworkPolicy, Policy, ReplayPolicy,
-    SandboxMode, POLICY_VERSION,
+    ArtifactsPolicy, Budgets, EnvPolicy, ExecPolicy, FsPolicy, NetworkEnforcementAck,
+    NetworkPolicy, Policy, ReplayPolicy, SandboxMode, POLICY_VERSION,
 };
 use tui_use::model::scenario::PolicyRef;
 use tui_use::model::{
@@ -138,17 +138,18 @@ impl PolicyBuilder {
 
         Policy {
             policy_version: POLICY_VERSION,
-            sandbox: SandboxMode::None,
-            sandbox_unsafe_ack: true,
+            sandbox: SandboxMode::Disabled { ack: true },
             network: NetworkPolicy::Disabled,
-            network_unsafe_ack: true,
+            network_enforcement: NetworkEnforcementAck {
+                unenforced_ack: true,
+            },
             fs: FsPolicy {
                 allowed_read: self.allowed_read,
                 allowed_write: self.allowed_write,
                 working_dir: Some(self.work_dir),
+                write_ack: has_write,
+                strict_write: false,
             },
-            fs_write_unsafe_ack: has_write,
-            fs_strict_write: false,
             exec: ExecPolicy {
                 allowed_executables: self.allowed_exec,
                 allow_shell: false,
@@ -509,8 +510,10 @@ mod tests {
             .build();
 
         assert_eq!(policy.policy_version, POLICY_VERSION);
-        assert!(matches!(policy.sandbox, SandboxMode::None));
-        assert!(policy.sandbox_unsafe_ack);
+        assert!(matches!(
+            policy.sandbox,
+            SandboxMode::Disabled { ack: true }
+        ));
         assert_eq!(policy.exec.allowed_executables, vec!["/bin/echo"]);
     }
 
@@ -521,7 +524,7 @@ mod tests {
             .with_write_access(vec!["/tmp/test".to_string()])
             .build();
 
-        assert!(policy.fs_write_unsafe_ack);
+        assert!(policy.fs.write_ack);
         assert_eq!(policy.fs.allowed_write, vec!["/tmp/test"]);
     }
 

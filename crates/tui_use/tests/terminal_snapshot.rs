@@ -346,3 +346,93 @@ fn snapshot_combined_attributes() {
         "bg should be blue"
     );
 }
+
+// ============================================================================
+// Edge case tests - malformed input handling
+// ============================================================================
+
+#[test]
+fn terminal_handles_incomplete_escape_sequence() {
+    // Incomplete escape sequence should be handled gracefully
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"Hello\x1b["); // Incomplete CSI sequence
+    terminal.process_bytes(b"World"); // Continue with more text
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    // Terminal should not crash and should capture some content
+    assert!(!snapshot.lines.is_empty());
+}
+
+#[test]
+fn terminal_handles_unknown_escape_sequence() {
+    // Unknown CSI sequence should be handled gracefully
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"\x1b[999zHello"); // Unknown CSI sequence followed by text
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    let joined = snapshot.lines.join("");
+    // The "Hello" text should still be captured
+    assert!(
+        joined.contains("Hello"),
+        "text after unknown sequence should be captured"
+    );
+}
+
+#[test]
+fn terminal_handles_null_bytes() {
+    // Null bytes in output should be handled gracefully
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"Hello\x00World");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    // Should not crash and should capture content
+    assert!(!snapshot.lines.is_empty());
+}
+
+#[test]
+fn terminal_handles_very_long_escape_sequence() {
+    // Very long escape sequence parameters should be handled
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    // Create a CSI sequence with many parameters
+    let mut seq = b"\x1b[".to_vec();
+    for i in 0..100 {
+        if i > 0 {
+            seq.push(b';');
+        }
+        seq.extend_from_slice(i.to_string().as_bytes());
+    }
+    seq.push(b'm');
+    terminal.process_bytes(&seq);
+    terminal.process_bytes(b"Text");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    // Should not crash and should capture content
+    assert!(!snapshot.lines.is_empty());
+}
+
+#[test]
+fn terminal_handles_bell_character() {
+    // Bell character (BEL, 0x07) should be handled gracefully
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"Hello\x07World");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    let joined = snapshot.lines.join("");
+    assert!(joined.contains("Hello"));
+    assert!(joined.contains("World"));
+}
+
+#[test]
+fn terminal_handles_carriage_return_only() {
+    // CR without LF should return to start of line
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"AAAAA\rBB");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    let first_line = &snapshot.lines[0];
+    // "BB" should overwrite first two "A"s
+    assert!(
+        first_line.starts_with("BB"),
+        "CR should return to start of line"
+    );
+}
