@@ -9,7 +9,7 @@
     "args": ["--help"],
     "cwd": "/tmp",
     "initial_size": {"rows": 24, "cols": 80},
-    "policy": {"path": "/Users/lelandhusband/Developer/Projects/tui-use/spec/examples/audio-extractor-policy.json"}
+    "policy": {"path": "./audio-extractor-policy.json"}
   },
   "steps": [
     {

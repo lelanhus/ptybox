@@ -10,7 +10,7 @@
     "cwd": "/tmp",
     "initial_size": {"rows": 24, "cols": 80},
     "policy": {
-      "policy_version": 3,
+      "policy_version": 4,
       "sandbox": "none",
       "sandbox_unsafe_ack": true,
       "network": "disabled",

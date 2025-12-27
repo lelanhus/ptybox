@@ -69,7 +69,7 @@ Examples:
 ### Policy
 `Policy` is deny-by-default and must be explicit about any privilege.
 
- - `policy_version: u32` (current: 3)
+ - `policy_version: u32` (current: 4)
 - `sandbox: SandboxMode`
 - `sandbox_unsafe_ack: bool` (default false; must be true when `sandbox: none`)
 - `network: NetworkPolicy`

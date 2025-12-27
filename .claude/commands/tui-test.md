@@ -36,7 +36,7 @@ tui-use enforces a deny-by-default security model. These are the most common blo
 
 ```json
 {
-  "policy_version": 3,
+  "policy_version": 4,
   "sandbox": "none",
   "sandbox_unsafe_ack": true,
   "network": "disabled",
