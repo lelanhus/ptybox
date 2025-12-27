@@ -18,6 +18,21 @@ pub struct ArtifactsWriter {
     events: fs::File,
     snapshot_count: usize,
     checksums: BTreeMap<String, String>,
+    /// Track whether checksums need to be written (dirty flag for batching)
+    checksums_dirty: bool,
+}
+
+impl Drop for ArtifactsWriter {
+    fn drop(&mut self) {
+        // Best-effort flush of file handles before close
+        let _ = self.transcript.flush();
+        let _ = self.events.flush();
+
+        // Write final checksums if dirty (batched writes optimization)
+        if self.checksums_dirty {
+            let _ = self.write_checksums_internal();
+        }
+    }
 }
 
 impl ArtifactsWriter {
@@ -46,6 +61,7 @@ impl ArtifactsWriter {
             events,
             snapshot_count: 0,
             checksums: BTreeMap::new(),
+            checksums_dirty: false,
         })
     }
 
@@ -115,6 +131,8 @@ impl ArtifactsWriter {
         Ok(())
     }
 
+    /// Record a checksum for an artifact. The checksum file is written lazily
+    /// to reduce I/O overhead (batched writes).
     fn record_checksum(&mut self, name: &str) -> RunnerResult<()> {
         if name == "checksums.json" {
             return Ok(());
@@ -122,10 +140,22 @@ impl ArtifactsWriter {
         let path = self.dir.join(name);
         let checksum = compute_checksum(&path)?;
         self.checksums.insert(name.to_string(), checksum);
-        self.write_checksums()
+        self.checksums_dirty = true;
+        Ok(())
     }
 
-    fn write_checksums(&mut self) -> RunnerResult<()> {
+    /// Flush all pending checksums to disk. Call this after all artifacts
+    /// have been written to ensure checksums.json is complete.
+    pub fn flush_checksums(&mut self) -> RunnerResult<()> {
+        if self.checksums_dirty {
+            self.write_checksums_internal()?;
+            self.checksums_dirty = false;
+        }
+        Ok(())
+    }
+
+    /// Internal method to write checksums (used by flush and Drop)
+    fn write_checksums_internal(&self) -> RunnerResult<()> {
         let data = serde_json::to_vec_pretty(&self.checksums)
             .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to serialize checksums", err))?;
         let path = self.dir.join("checksums.json");

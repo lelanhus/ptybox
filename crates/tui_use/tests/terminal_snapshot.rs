@@ -436,3 +436,108 @@ fn terminal_handles_carriage_return_only() {
         "CR should return to start of line"
     );
 }
+
+#[test]
+fn terminal_handles_multiple_incomplete_sequences() {
+    // Multiple incomplete escape sequences in succession
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"\x1b[\x1b[\x1b[mHello");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    // Should not crash and should capture text
+    assert!(!snapshot.lines.is_empty());
+}
+
+#[test]
+fn terminal_handles_interleaved_valid_invalid_sequences() {
+    // Mix of valid and invalid sequences
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"\x1b[31mRed\x1b[999zInvalid\x1b[0mNormal");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    let joined = snapshot.lines.join("");
+    assert!(joined.contains("Red"), "valid red text should be captured");
+    assert!(
+        joined.contains("Normal"),
+        "text after reset should be captured"
+    );
+}
+
+#[test]
+fn terminal_handles_escape_at_end_of_input() {
+    // Escape character as the very last byte
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"Hello\x1b");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    let joined = snapshot.lines.join("");
+    assert!(
+        joined.contains("Hello"),
+        "text before escape should be captured"
+    );
+}
+
+#[test]
+fn terminal_handles_csi_at_end_of_input() {
+    // CSI sequence start as the very last bytes
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"Hello\x1b[");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    let joined = snapshot.lines.join("");
+    assert!(
+        joined.contains("Hello"),
+        "text before CSI should be captured"
+    );
+}
+
+#[test]
+fn terminal_handles_backspace_character() {
+    // Backspace should move cursor back
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"ABC\x08X");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    let first_line = &snapshot.lines[0];
+    // X should overwrite C
+    assert!(
+        first_line.contains("ABX"),
+        "backspace should allow overwrite, got: {}",
+        first_line
+    );
+}
+
+#[test]
+fn terminal_handles_tab_character() {
+    // Tab should advance cursor
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"A\tB");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    // Should not crash and should contain both characters
+    let joined = snapshot.lines.join("");
+    assert!(joined.contains('A'), "should contain A");
+    assert!(joined.contains('B'), "should contain B");
+}
+
+#[test]
+fn terminal_handles_form_feed() {
+    // Form feed (0x0C) should be handled gracefully
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"Hello\x0cWorld");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    // Should not crash
+    assert!(!snapshot.lines.is_empty());
+}
+
+#[test]
+fn terminal_handles_vertical_tab() {
+    // Vertical tab (0x0B) should be handled gracefully
+    let mut terminal = Terminal::new(TerminalSize { rows: 5, cols: 20 });
+    terminal.process_bytes(b"Hello\x0bWorld");
+
+    let snapshot = terminal.snapshot().expect("snapshot should succeed");
+    // Should not crash
+    assert!(!snapshot.lines.is_empty());
+}

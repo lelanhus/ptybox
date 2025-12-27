@@ -208,3 +208,140 @@ fn sandbox_allows_safe_paths_with_special_chars() {
         result.err()
     );
 }
+
+// =============================================================================
+// Additional Security Edge Case Tests
+// =============================================================================
+
+#[test]
+fn sandbox_rejects_unicode_path_characters() {
+    // Unicode characters outside ASCII should be rejected
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec!["/tmp/日本語".to_string()];
+    let path = temp_profile("unicode-reject");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_err(), "Unicode paths should be rejected");
+    let err = result.unwrap_err();
+    assert_eq!(err.code, ErrorCode::PolicyDenied);
+}
+
+#[test]
+fn sandbox_rejects_emoji_in_path() {
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec!["/tmp/test🎉dir".to_string()];
+    let path = temp_profile("emoji-reject");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_err(), "Emoji in paths should be rejected");
+}
+
+#[test]
+fn sandbox_rejects_backslash_in_path() {
+    // Backslash could be used for escape sequences
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec!["/tmp\\evil".to_string()];
+    let path = temp_profile("backslash-reject");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_err(), "Backslash in paths should be rejected");
+}
+
+#[test]
+fn sandbox_rejects_tab_in_path() {
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec!["/tmp\ttest".to_string()];
+    let path = temp_profile("tab-reject");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_err(), "Tab in paths should be rejected");
+}
+
+#[test]
+fn sandbox_rejects_semicolon_in_path() {
+    // Semicolons could be used to inject S-expression comments
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec!["/tmp;(allow default)".to_string()];
+    let path = temp_profile("semicolon-reject");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_err(), "Semicolon in paths should be rejected");
+}
+
+#[test]
+fn sandbox_handles_empty_path_list() {
+    // Empty path lists should work fine
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec![];
+    policy.fs.allowed_write = vec![];
+    policy.exec.allowed_executables = vec![];
+    let path = temp_profile("empty-lists");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_ok(), "Empty path lists should be allowed");
+}
+
+#[test]
+fn sandbox_handles_very_long_valid_path() {
+    // Very long but valid path should work
+    let mut policy = base_policy();
+    let long_path = format!("/tmp/{}", "a".repeat(200));
+    policy.fs.allowed_read = vec![long_path];
+    let path = temp_profile("long-path");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_ok(), "Long valid paths should be allowed");
+}
+
+#[test]
+fn sandbox_rejects_dollar_sign_in_path() {
+    // Dollar sign could be used for variable expansion
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec!["/tmp/$HOME".to_string()];
+    let path = temp_profile("dollar-reject");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_err(), "Dollar sign in paths should be rejected");
+}
+
+#[test]
+fn sandbox_rejects_backtick_in_path() {
+    // Backtick could be used for command substitution
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec!["/tmp/`whoami`".to_string()];
+    let path = temp_profile("backtick-reject");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_err(), "Backtick in paths should be rejected");
+}
+
+#[test]
+fn sandbox_rejects_pipe_in_path() {
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec!["/tmp/test|cat".to_string()];
+    let path = temp_profile("pipe-reject");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_err(), "Pipe in paths should be rejected");
+}
+
+#[test]
+fn sandbox_rejects_ampersand_in_path() {
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec!["/tmp/test&background".to_string()];
+    let path = temp_profile("ampersand-reject");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_err(), "Ampersand in paths should be rejected");
+}
+
+#[test]
+fn sandbox_rejects_hash_in_path() {
+    // Hash could be used for S-expression comments
+    let mut policy = base_policy();
+    policy.fs.allowed_read = vec!["/tmp/test#comment".to_string()];
+    let path = temp_profile("hash-reject");
+    let result = write_profile(&path, &policy);
+    let _ = fs::remove_file(&path);
+    assert!(result.is_err(), "Hash in paths should be rejected");
+}

@@ -8,7 +8,7 @@ pub const SCENARIO_VERSION: u32 = 1;
 
 /// Observation format version.
 ///
-/// Observations returned by [`Session::observe()`] include `protocol_version`
+/// Observations returned by `Session::observe()` include `protocol_version`
 /// for overall format, but this constant tracks the observation-specific schema.
 pub const OBSERVATION_VERSION: u32 = 1;
 

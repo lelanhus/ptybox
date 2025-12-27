@@ -750,7 +750,8 @@ impl PolicyBuilder {
 
     /// Build the policy, consuming the builder.
     ///
-    /// This returns the policy directly. For validation, use [`build_validated`].
+    /// This returns the policy directly. Use `tui_use::policy::validate_policy`
+    /// to validate the policy before use.
     #[must_use]
     pub fn build(self) -> Policy {
         self.policy

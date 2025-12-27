@@ -7,7 +7,7 @@ pub const SNAPSHOT_VERSION: u32 = 1;
 /// Terminal dimensions in rows and columns.
 ///
 /// Default is 24 rows by 80 columns (standard VT100 size).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalSize {
     /// Number of rows (height).
     pub rows: u16,
@@ -24,7 +24,7 @@ impl Default for TerminalSize {
 /// Cursor position and visibility state.
 ///
 /// Coordinates are 0-based (row 0 is top, col 0 is left).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor {
     /// Row position (0-based, 0 is top).
     pub row: u16,
@@ -38,7 +38,7 @@ pub struct Cursor {
 ///
 /// Contains normalized text lines and optional cell-level style data.
 /// The `lines` field is the primary way to verify screen content in assertions.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScreenSnapshot {
     /// Format version for compatibility checking.
     pub snapshot_version: u32,
@@ -61,7 +61,7 @@ pub struct ScreenSnapshot {
 /// Single terminal cell with character and styling.
 ///
 /// Used when detailed style information is needed beyond plain text.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cell {
     /// Character or grapheme cluster in this cell.
     pub ch: String,
@@ -72,7 +72,7 @@ pub struct Cell {
 }
 
 /// Terminal cell styling attributes.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Style {
     /// Foreground color.
     pub fg: Color,
@@ -89,7 +89,7 @@ pub struct Style {
 }
 
 /// Terminal color representation.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Color {
     /// Terminal default color.

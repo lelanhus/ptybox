@@ -303,6 +303,9 @@ fn artifacts_checksum_correctness() {
         .write_policy(&policy)
         .expect("Failed to write policy");
 
+    // Flush checksums (batched writes optimization)
+    writer.flush_checksums().expect("Failed to flush checksums");
+
     // Read checksums
     let checksums_path = dir.join("checksums.json");
     assert!(checksums_path.exists(), "checksums.json should exist");
@@ -368,6 +371,9 @@ fn artifacts_checksum_updates_on_write() {
         .write_normalization(&record)
         .expect("Failed to write normalization");
 
+    // Flush checksums (batched writes optimization)
+    writer.flush_checksums().expect("Failed to flush checksums");
+
     // Read checksums after first write
     let checksums_path = dir.join("checksums.json");
     let content1 = fs::read_to_string(&checksums_path).expect("Failed to read checksums");
@@ -379,6 +385,9 @@ fn artifacts_checksum_updates_on_write() {
     writer
         .write_policy(&policy)
         .expect("Failed to write policy");
+
+    // Flush checksums (batched writes optimization)
+    writer.flush_checksums().expect("Failed to flush checksums");
 
     // Read checksums after second write
     let content2 = fs::read_to_string(&checksums_path).expect("Failed to read checksums");
@@ -409,6 +418,9 @@ fn artifacts_checksum_not_self_referential() {
     writer
         .write_policy(&policy)
         .expect("Failed to write policy");
+
+    // Flush checksums (batched writes optimization)
+    writer.flush_checksums().expect("Failed to flush checksums");
 
     let checksums_path = dir.join("checksums.json");
     let content = fs::read_to_string(&checksums_path).expect("Failed to read checksums");
