@@ -436,6 +436,286 @@ fn emit_progress(progress: Option<&Arc<dyn ProgressCallback>>, event: ProgressEv
     }
 }
 
+/// Get the current working directory as a string, with fallback.
+fn get_cwd_string(cwd: Option<String>, policy_cwd: Option<&String>) -> String {
+    cwd.or_else(|| policy_cwd.cloned()).unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "<unknown>".to_string())
+    })
+}
+
+/// Create a skipped step result.
+fn create_skipped_step(
+    step: &crate::model::Step,
+    time_ms: u64,
+    error: Option<&RunnerError>,
+) -> StepResult {
+    StepResult {
+        step_id: step.id,
+        name: step.name.clone(),
+        status: StepStatus::Skipped,
+        attempts: 0,
+        started_at_ms: time_ms,
+        ended_at_ms: time_ms,
+        action: step.action.clone(),
+        assertions: Vec::new(),
+        error: error.map(|e| e.to_error_info()),
+    }
+}
+
+/// Result of executing a single step.
+struct StepExecutionResult {
+    step_result: StepResult,
+    run_error: Option<RunnerError>,
+}
+
+/// Execute a single step with retry logic.
+#[allow(clippy::too_many_arguments)]
+fn execute_step(
+    session: &mut Session,
+    step: &crate::model::Step,
+    policy: &Policy,
+    effective_policy: &EffectivePolicy,
+    artifacts: &mut Option<ArtifactsWriter>,
+    output_bytes: &mut u64,
+    step_started_ms: u64,
+    run_started: &Instant,
+) -> RunnerResult<StepExecutionResult> {
+    let mut attempts = 0;
+    let mut last_error: Option<RunnerError> = None;
+    let mut status = StepStatus::Failed;
+    let mut assertion_results = Vec::new();
+
+    for _ in 0..=step.retries {
+        attempts += 1;
+        effective_policy.validate_action(&step.action)?;
+
+        let observation = match perform_action(
+            session,
+            &step.action,
+            Duration::from_millis(step.timeout_ms),
+            policy,
+        ) {
+            Ok(obs) => obs,
+            Err(err) => {
+                last_error = Some(if err.code == ErrorCode::Timeout {
+                    with_step_timeout_context(err, step)
+                } else {
+                    err
+                });
+                status = StepStatus::Errored;
+                continue;
+            }
+        };
+
+        // Check budgets
+        *output_bytes += observation
+            .transcript_delta
+            .as_ref()
+            .map(|s| s.len() as u64)
+            .unwrap_or(0);
+
+        if let Some(budget_error) = check_step_budgets(&observation, *output_bytes, policy, step)? {
+            last_error = Some(budget_error);
+            status = StepStatus::Errored;
+            break;
+        }
+
+        // Write artifacts
+        if let Some(writer) = artifacts.as_mut() {
+            writer.write_snapshot(&observation.screen)?;
+            if let Some(delta) = &observation.transcript_delta {
+                writer.write_transcript(delta)?;
+            }
+            writer.write_observation(&observation)?;
+        }
+
+        // Evaluate assertions
+        assertion_results.clear();
+        let mut assertions_passed = true;
+        for assertion in &step.assert {
+            let (passed, message, details) = crate::assertions::evaluate(&observation, assertion);
+            if !passed {
+                assertions_passed = false;
+            }
+            assertion_results.push(AssertionResult {
+                assertion_type: assertion.assertion_type.clone(),
+                passed,
+                message,
+                details,
+            });
+        }
+
+        if assertions_passed {
+            status = StepStatus::Passed;
+            last_error = None;
+            break;
+        }
+        last_error = Some(RunnerError::assertion_failed(
+            "one or more assertions failed",
+            None,
+        ));
+    }
+
+    let step_ended_ms = elapsed_ms(run_started);
+    let error_info = last_error.as_ref().map(|e| e.to_error_info());
+    let run_error = if status == StepStatus::Passed {
+        None
+    } else {
+        last_error
+    };
+
+    Ok(StepExecutionResult {
+        step_result: StepResult {
+            step_id: step.id,
+            name: step.name.clone(),
+            status,
+            attempts,
+            started_at_ms: step_started_ms,
+            ended_at_ms: step_ended_ms,
+            action: step.action.clone(),
+            assertions: assertion_results,
+            error: error_info,
+        },
+        run_error,
+    })
+}
+
+/// Check step budgets and return an error if exceeded.
+fn check_step_budgets(
+    observation: &crate::model::Observation,
+    output_bytes: u64,
+    policy: &Policy,
+    step: &crate::model::Step,
+) -> RunnerResult<Option<RunnerError>> {
+    if output_bytes > policy.budgets.max_output_bytes {
+        return Ok(Some(RunnerError::timeout(
+            "E_TIMEOUT",
+            "output budget exceeded",
+            Some(step_context(
+                step,
+                Some(serde_json::json!({
+                    "max_output_bytes": policy.budgets.max_output_bytes
+                })),
+            )),
+        )));
+    }
+
+    if snapshot_bytes(&observation.screen)? > policy.budgets.max_snapshot_bytes {
+        return Ok(Some(RunnerError::timeout(
+            "E_TIMEOUT",
+            "snapshot budget exceeded",
+            Some(step_context(
+                step,
+                Some(serde_json::json!({
+                    "max_snapshot_bytes": policy.budgets.max_snapshot_bytes
+                })),
+            )),
+        )));
+    }
+
+    Ok(None)
+}
+
+/// Wait for process exit with budget enforcement, returning exit status.
+fn await_scenario_exit(
+    session: &mut Session,
+    policy: &Policy,
+    run_started: &Instant,
+    has_error: bool,
+) -> RunnerResult<Option<ExitStatus>> {
+    if has_error {
+        return Ok(session
+            .terminate_process_group(Duration::from_millis(200))
+            .ok()
+            .flatten()
+            .map(|status| convert_exit_status(status, true)));
+    }
+
+    let max_runtime = Duration::from_millis(policy.budgets.max_runtime_ms);
+    let elapsed = run_started.elapsed();
+
+    if elapsed >= max_runtime {
+        return Err(create_timeout_error(session, policy));
+    }
+
+    let remaining = max_runtime - elapsed;
+    match session.wait_for_exit(remaining)? {
+        Some(status) => Ok(Some(convert_exit_status(status, false))),
+        None => Err(create_timeout_error(session, policy)),
+    }
+}
+
+/// Convert a `portable_pty` exit status to our `ExitStatus` type.
+fn convert_exit_status(
+    status: portable_pty::ExitStatus,
+    terminated_by_harness: bool,
+) -> ExitStatus {
+    #[allow(clippy::cast_possible_wrap)]
+    let code = status.exit_code() as i32;
+    ExitStatus {
+        success: status.success(),
+        exit_code: Some(code),
+        signal: None,
+        terminated_by_harness,
+    }
+}
+
+/// Create a timeout error, terminating the process if needed.
+fn create_timeout_error(session: &mut Session, policy: &Policy) -> RunnerError {
+    let termination = session.terminate_process_group(Duration::from_millis(200));
+    let context = match termination {
+        Ok(_) => serde_json::json!({"max_runtime_ms": policy.budgets.max_runtime_ms}),
+        Err(err) => serde_json::json!({
+            "max_runtime_ms": policy.budgets.max_runtime_ms,
+            "termination_error": err.to_string()
+        }),
+    };
+    RunnerError::timeout("E_TIMEOUT", "run exceeded max runtime budget", context)
+}
+
+/// Poll for process exit in exec mode, returning final observation and exit status.
+fn poll_exec_until_exit(
+    session: &mut Session,
+    policy: &Policy,
+    artifacts: &mut Option<ArtifactsWriter>,
+    deadline: Instant,
+) -> RunnerResult<(crate::model::Observation, ExitStatus)> {
+    let mut output_bytes: u64 = 0;
+    let mut final_observation = session.observe(Duration::from_millis(50))?;
+    enforce_exec_budgets(session, &final_observation, &mut output_bytes, policy)?;
+
+    if let Some(writer) = artifacts.as_mut() {
+        writer.write_observation(&final_observation)?;
+    }
+
+    loop {
+        if let Some(status) = session.wait_for_exit(Duration::from_millis(0))? {
+            // Capture final observation after exit
+            let observation = session.observe(Duration::from_millis(10))?;
+            if let Some(writer) = artifacts.as_mut() {
+                writer.write_observation(&observation)?;
+            }
+            return Ok((observation, convert_exit_status(status, false)));
+        }
+
+        if Instant::now() > deadline {
+            return Err(create_timeout_error(session, policy));
+        }
+
+        let observation = session.observe(Duration::from_millis(50))?;
+        enforce_exec_budgets(session, &observation, &mut output_bytes, policy)?;
+        if let Some(writer) = artifacts.as_mut() {
+            writer.write_observation(&observation)?;
+        }
+        #[allow(unused_assignments)]
+        {
+            final_observation = observation;
+        }
+    }
+}
+
 /// Run a scenario with the given options.
 ///
 /// This is the primary entry point for scenario-based execution.
@@ -454,7 +734,6 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
     let scenario_clone = scenario.clone();
     let progress = options.progress.clone();
 
-    // Emit run started event
     emit_progress(
         progress.as_ref(),
         ProgressEvent::RunStarted {
@@ -464,402 +743,318 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
     );
 
     let mut artifacts: Option<ArtifactsWriter> = None;
-
     let mut policy_for_error: Option<Policy> = None;
-    // RAII guard for sandbox profile cleanup - ensures cleanup even on panic
     let mut cleanup_guard = SandboxCleanupGuard::new(None);
 
-    let result: RunnerResult<RunResult> = (|| {
-        let policy = load_policy_ref(&scenario.run.policy)?;
-        policy_for_error = Some(policy.clone());
+    let result = run_scenario_inner(
+        &scenario,
+        &options,
+        run_id,
+        &run_started,
+        &progress,
+        &mut artifacts,
+        &mut policy_for_error,
+        &mut cleanup_guard,
+    );
 
-        validate_fs_policy(&policy.fs)?;
-        validate_artifacts_policy(&policy)?;
+    handle_scenario_result(
+        &result,
+        &scenario_clone,
+        run_id,
+        &run_started,
+        &progress,
+        &mut artifacts,
+        &policy_for_error,
+    );
 
-        let artifacts_config = resolve_artifacts_config(&policy, options.artifacts);
-        let artifacts_dir = artifacts_config.as_ref().map(|config| config.dir.clone());
+    drop(cleanup_guard);
+    result
+}
 
-        validate_write_access(&policy, artifacts_dir.as_deref())?;
+/// Inner implementation of `run_scenario` to reduce main function complexity.
+#[allow(clippy::too_many_arguments, clippy::ref_option)]
+fn run_scenario_inner(
+    scenario: &Scenario,
+    options: &RunnerOptions,
+    run_id: RunId,
+    run_started: &Instant,
+    progress: &Option<Arc<dyn ProgressCallback>>,
+    artifacts: &mut Option<ArtifactsWriter>,
+    policy_for_error: &mut Option<Policy>,
+    cleanup_guard: &mut SandboxCleanupGuard,
+) -> RunnerResult<RunResult> {
+    let policy = load_policy_ref(&scenario.run.policy)?;
+    *policy_for_error = Some(policy.clone());
 
-        if let Some(config) = artifacts_config {
-            validate_artifacts_dir(&config.dir, &policy.fs)?;
-            let mut writer = ArtifactsWriter::new(run_id, config)?;
-            writer.write_normalization(&NormalizationRecord {
-                normalization_version: NORMALIZATION_VERSION,
-                filters: Vec::new(),
-                strict: false,
-                source: crate::model::NormalizationSource::None,
-                rules: Vec::new(),
-            })?;
-            artifacts = Some(writer);
+    let artifacts_dir = setup_scenario_artifacts(scenario, &policy, options, run_id, artifacts)?;
+    validate_policy(&policy)?;
+    validate_scenario_steps(scenario, &policy)?;
+
+    let effective_policy = EffectivePolicy::new(policy.clone());
+    effective_policy.validate_run_config(&scenario.run)?;
+
+    if let Some(writer) = artifacts.as_mut() {
+        writer.write_policy(&policy)?;
+    }
+
+    let mut session =
+        spawn_scenario_session(scenario, &policy, &artifacts_dir, run_id, cleanup_guard)?;
+    let (step_results, run_error) = execute_scenario_steps(
+        &mut session,
+        scenario,
+        &policy,
+        &effective_policy,
+        artifacts,
+        run_started,
+        progress,
+    )?;
+
+    let final_observation = session.observe(Duration::from_millis(10)).ok();
+    if let (Some(writer), Some(obs)) = (artifacts.as_mut(), final_observation.as_ref()) {
+        writer.write_observation(obs)?;
+    }
+
+    let exit_status = await_scenario_exit(&mut session, &policy, run_started, run_error.is_some())?;
+    let run_result = build_scenario_result(
+        scenario,
+        &policy,
+        run_id,
+        run_started,
+        step_results,
+        final_observation,
+        exit_status,
+        run_error,
+    );
+
+    if let Some(writer) = artifacts.as_mut() {
+        writer.write_run_result(&run_result)?;
+        writer.flush_checksums()?;
+    }
+
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::RunCompleted {
+            run_id,
+            success: run_result.status == RunStatus::Passed,
+            duration_ms: run_result.ended_at_ms,
+        },
+    );
+
+    Ok(run_result)
+}
+
+/// Setup artifacts for scenario execution.
+fn setup_scenario_artifacts(
+    scenario: &Scenario,
+    policy: &Policy,
+    options: &RunnerOptions,
+    run_id: RunId,
+    artifacts: &mut Option<ArtifactsWriter>,
+) -> RunnerResult<Option<PathBuf>> {
+    validate_fs_policy(&policy.fs)?;
+    validate_artifacts_policy(policy)?;
+
+    let artifacts_config = resolve_artifacts_config(policy, options.artifacts.clone());
+    let artifacts_dir = artifacts_config.as_ref().map(|config| config.dir.clone());
+    validate_write_access(policy, artifacts_dir.as_deref())?;
+
+    if let Some(config) = artifacts_config {
+        validate_artifacts_dir(&config.dir, &policy.fs)?;
+        let mut writer = ArtifactsWriter::new(run_id, config)?;
+        writer.write_normalization(&NormalizationRecord {
+            normalization_version: NORMALIZATION_VERSION,
+            filters: Vec::new(),
+            strict: false,
+            source: crate::model::NormalizationSource::None,
+            rules: Vec::new(),
+        })?;
+        writer.write_scenario(scenario)?;
+        *artifacts = Some(writer);
+    }
+
+    Ok(artifacts_dir)
+}
+
+/// Validate scenario steps against policy budgets.
+fn validate_scenario_steps(scenario: &Scenario, policy: &Policy) -> RunnerResult<()> {
+    if scenario.steps.len() as u64 > policy.budgets.max_steps {
+        return Err(RunnerError::timeout(
+            "E_TIMEOUT",
+            "scenario exceeds max_steps budget",
+            serde_json::json!({"max_steps": policy.budgets.max_steps}),
+        ));
+    }
+    Ok(())
+}
+
+/// Spawn a session for scenario execution.
+#[allow(clippy::ref_option)]
+fn spawn_scenario_session(
+    scenario: &Scenario,
+    policy: &Policy,
+    artifacts_dir: &Option<PathBuf>,
+    run_id: RunId,
+    cleanup_guard: &mut SandboxCleanupGuard,
+) -> RunnerResult<Session> {
+    let cwd = scenario
+        .run
+        .cwd
+        .clone()
+        .or_else(|| policy.fs.working_dir.clone());
+    let spawn = build_spawn_command(
+        policy,
+        &scenario.run.command,
+        &scenario.run.args,
+        artifacts_dir.as_ref(),
+        run_id,
+    )?;
+    cleanup_guard.path = spawn.cleanup_path.clone();
+
+    Session::spawn(SessionConfig {
+        command: spawn.command,
+        args: spawn.args,
+        cwd,
+        size: scenario.run.initial_size.clone(),
+        run_id,
+        env: policy.env.clone(),
+    })
+}
+
+/// Execute all steps in a scenario.
+#[allow(clippy::ref_option)]
+fn execute_scenario_steps(
+    session: &mut Session,
+    scenario: &Scenario,
+    policy: &Policy,
+    effective_policy: &EffectivePolicy,
+    artifacts: &mut Option<ArtifactsWriter>,
+    run_started: &Instant,
+    progress: &Option<Arc<dyn ProgressCallback>>,
+) -> RunnerResult<(Vec<StepResult>, Option<RunnerError>)> {
+    let mut step_results = Vec::new();
+    let mut run_error: Option<RunnerError> = None;
+    let mut output_bytes: u64 = 0;
+
+    for (step_index, step) in scenario.steps.iter().enumerate() {
+        if run_error.is_some() {
+            step_results.push(create_skipped_step(step, elapsed_ms(run_started), None));
+            continue;
         }
 
-        if let Some(writer) = artifacts.as_mut() {
-            writer.write_scenario(&scenario)?;
-        }
-
-        validate_policy(&policy)?;
-
-        if scenario.steps.len() as u64 > policy.budgets.max_steps {
-            return Err(RunnerError::timeout(
+        if elapsed_ms(run_started) > policy.budgets.max_runtime_ms {
+            run_error = Some(RunnerError::timeout(
                 "E_TIMEOUT",
-                "scenario exceeds max_steps budget",
-                serde_json::json!({"max_steps": policy.budgets.max_steps}),
+                "run exceeded max runtime budget",
+                serde_json::json!({"max_runtime_ms": policy.budgets.max_runtime_ms}),
             ));
+            step_results.push(create_skipped_step(
+                step,
+                elapsed_ms(run_started),
+                run_error.as_ref(),
+            ));
+            continue;
         }
 
-        let effective_policy = EffectivePolicy::new(policy.clone());
-        effective_policy.validate_run_config(&scenario.run)?;
-
-        if let Some(writer) = artifacts.as_mut() {
-            writer.write_policy(&policy)?;
-        }
-
-        let cwd = scenario
-            .run
-            .cwd
-            .clone()
-            .or_else(|| policy.fs.working_dir.clone());
-
-        let spawn = build_spawn_command(
-            &policy,
-            &scenario.run.command,
-            &scenario.run.args,
-            artifacts_dir.as_ref(),
-            run_id,
-        )?;
-        cleanup_guard.path = spawn.cleanup_path.clone();
-
-        let session_config = SessionConfig {
-            command: spawn.command,
-            args: spawn.args,
-            cwd,
-            size: scenario.run.initial_size.clone(),
-            run_id,
-            env: policy.env.clone(),
-        };
-
-        let mut session = Session::spawn(session_config)?;
-        let mut step_results = Vec::new();
-        let mut run_error: Option<RunnerError> = None;
-        let mut output_bytes: u64 = 0;
-
-        for (step_index, step) in scenario.steps.iter().enumerate() {
-            if run_error.is_some() {
-                step_results.push(StepResult {
-                    step_id: step.id,
-                    name: step.name.clone(),
-                    status: StepStatus::Skipped,
-                    attempts: 0,
-                    started_at_ms: elapsed_ms(&run_started),
-                    ended_at_ms: elapsed_ms(&run_started),
-                    action: step.action.clone(),
-                    assertions: Vec::new(),
-                    error: None,
-                });
-                continue;
-            }
-
-            if elapsed_ms(&run_started) > policy.budgets.max_runtime_ms {
-                run_error = Some(RunnerError::timeout(
-                    "E_TIMEOUT",
-                    "run exceeded max runtime budget",
-                    serde_json::json!({"max_runtime_ms": policy.budgets.max_runtime_ms}),
-                ));
-                step_results.push(StepResult {
-                    step_id: step.id,
-                    name: step.name.clone(),
-                    status: StepStatus::Skipped,
-                    attempts: 0,
-                    started_at_ms: elapsed_ms(&run_started),
-                    ended_at_ms: elapsed_ms(&run_started),
-                    action: step.action.clone(),
-                    assertions: Vec::new(),
-                    error: run_error.as_ref().map(|err| err.to_error_info()),
-                });
-                continue;
-            }
-
-            // Emit step started event (1-based index for display)
-            emit_progress(
-                progress.as_ref(),
-                ProgressEvent::StepStarted {
-                    step_id: step.id,
-                    step_index: step_index + 1,
-                    name: step.name.clone(),
-                },
-            );
-
-            let step_started_ms = elapsed_ms(&run_started);
-            let mut attempts = 0;
-            let mut last_error: Option<RunnerError> = None;
-            let mut status = StepStatus::Failed;
-            let mut assertion_results = Vec::new();
-
-            for _ in 0..=step.retries {
-                attempts += 1;
-                effective_policy.validate_action(&step.action)?;
-
-                let observation = perform_action(
-                    &mut session,
-                    &step.action,
-                    Duration::from_millis(step.timeout_ms),
-                    &policy,
-                );
-
-                let observation = match observation {
-                    Ok(obs) => obs,
-                    Err(err) => {
-                        if err.code == ErrorCode::Timeout {
-                            last_error = Some(with_step_timeout_context(err, step));
-                        } else {
-                            last_error = Some(err);
-                        }
-                        status = StepStatus::Errored;
-                        continue;
-                    }
-                };
-
-                output_bytes += observation
-                    .transcript_delta
-                    .as_ref()
-                    .map(|s| s.len() as u64)
-                    .unwrap_or(0);
-                if output_bytes > policy.budgets.max_output_bytes {
-                    last_error = Some(RunnerError::timeout(
-                        "E_TIMEOUT",
-                        "output budget exceeded",
-                        Some(step_context(
-                            step,
-                            Some(serde_json::json!({
-                                "max_output_bytes": policy.budgets.max_output_bytes
-                            })),
-                        )),
-                    ));
-                    status = StepStatus::Errored;
-                    break;
-                }
-
-                if snapshot_bytes(&observation.screen)? > policy.budgets.max_snapshot_bytes {
-                    last_error = Some(RunnerError::timeout(
-                        "E_TIMEOUT",
-                        "snapshot budget exceeded",
-                        Some(step_context(
-                            step,
-                            Some(serde_json::json!({
-                                "max_snapshot_bytes": policy.budgets.max_snapshot_bytes
-                            })),
-                        )),
-                    ));
-                    status = StepStatus::Errored;
-                    break;
-                }
-
-                if let Some(writer) = artifacts.as_mut() {
-                    writer.write_snapshot(&observation.screen)?;
-                    if let Some(delta) = &observation.transcript_delta {
-                        writer.write_transcript(delta)?;
-                    }
-                    writer.write_observation(&observation)?;
-                }
-
-                let mut assertions_passed = true;
-                assertion_results.clear();
-                for assertion in &step.assert {
-                    let (passed, message, details) =
-                        crate::assertions::evaluate(&observation, assertion);
-                    if !passed {
-                        assertions_passed = false;
-                    }
-                    assertion_results.push(AssertionResult {
-                        assertion_type: assertion.assertion_type.clone(),
-                        passed,
-                        message,
-                        details,
-                    });
-                }
-
-                if assertions_passed {
-                    status = StepStatus::Passed;
-                    last_error = None;
-                    break;
-                } else {
-                    last_error = Some(RunnerError::assertion_failed(
-                        "one or more assertions failed",
-                        None,
-                    ));
-                }
-            }
-
-            let step_ended_ms = elapsed_ms(&run_started);
-            let error_info = last_error.as_ref().map(|err| err.to_error_info());
-            if status != StepStatus::Passed {
-                run_error = last_error.take();
-            }
-            step_results.push(StepResult {
-                step_id: step.id,
-                name: step.name.clone(),
-                status: status.clone(),
-                attempts,
-                started_at_ms: step_started_ms,
-                ended_at_ms: step_ended_ms,
-                action: step.action.clone(),
-                assertions: assertion_results.clone(),
-                error: error_info,
-            });
-
-            // Emit step completed event
-            emit_progress(
-                progress.as_ref(),
-                ProgressEvent::StepCompleted {
-                    step_id: step.id,
-                    name: step.name.clone(),
-                    status,
-                    duration_ms: step_ended_ms - step_started_ms,
-                    assertions: assertion_results,
-                },
-            );
-        }
-
-        let final_observation = session.observe(Duration::from_millis(10)).ok();
-        if let (Some(writer), Some(observation)) = (artifacts.as_mut(), final_observation.as_ref())
-        {
-            writer.write_observation(observation)?;
-        }
-        let exit_status = match run_error.as_ref() {
-            Some(_) => session
-                .terminate_process_group(Duration::from_millis(200))
-                .ok()
-                .flatten()
-                .map(|status| {
-                    // Exit codes are typically 0-255, safe to cast
-                    #[allow(clippy::cast_possible_wrap)]
-                    let code = status.exit_code() as i32;
-                    ExitStatus {
-                        success: status.success(),
-                        exit_code: Some(code),
-                        signal: None,
-                        terminated_by_harness: true,
-                    }
-                }),
-            None => {
-                let max_runtime = Duration::from_millis(policy.budgets.max_runtime_ms);
-                let elapsed = run_started.elapsed();
-                if elapsed >= max_runtime {
-                    let termination = session.terminate_process_group(Duration::from_millis(200));
-                    let context = match termination {
-                        Ok(_) => {
-                            serde_json::json!({"max_runtime_ms": policy.budgets.max_runtime_ms})
-                        }
-                        Err(err) => serde_json::json!({
-                            "max_runtime_ms": policy.budgets.max_runtime_ms,
-                            "termination_error": err.to_string()
-                        }),
-                    };
-                    return Err(RunnerError::timeout(
-                        "E_TIMEOUT",
-                        "run exceeded max runtime budget",
-                        context,
-                    ));
-                }
-                let remaining = max_runtime - elapsed;
-                match session.wait_for_exit(remaining)? {
-                    Some(status) => {
-                        // Exit codes are typically 0-255, safe to cast
-                        #[allow(clippy::cast_possible_wrap)]
-                        let code = status.exit_code() as i32;
-                        Some(ExitStatus {
-                            success: status.success(),
-                            exit_code: Some(code),
-                            signal: None,
-                            terminated_by_harness: false,
-                        })
-                    }
-                    None => {
-                        let termination =
-                            session.terminate_process_group(Duration::from_millis(200));
-                        let context = match termination {
-                            Ok(_) => {
-                                serde_json::json!({"max_runtime_ms": policy.budgets.max_runtime_ms})
-                            }
-                            Err(err) => serde_json::json!({
-                                "max_runtime_ms": policy.budgets.max_runtime_ms,
-                                "termination_error": err.to_string()
-                            }),
-                        };
-                        return Err(RunnerError::timeout(
-                            "E_TIMEOUT",
-                            "run exceeded max runtime budget",
-                            context,
-                        ));
-                    }
-                }
-            }
-        };
-
-        let ended_at = elapsed_ms(&run_started);
-
-        let status = if step_results
-            .iter()
-            .all(|s| matches!(s.status, StepStatus::Passed))
-        {
-            RunStatus::Passed
-        } else {
-            RunStatus::Failed
-        };
-
-        let run_result = RunResult {
-            run_result_version: 1,
-            protocol_version: PROTOCOL_VERSION,
-            run_id,
-            status,
-            started_at_ms: 0,
-            ended_at_ms: ended_at,
-            command: scenario.run.command.clone(),
-            args: scenario.run.args.clone(),
-            cwd: scenario
-                .run
-                .cwd
-                .clone()
-                .or_else(|| policy.fs.working_dir.clone())
-                .unwrap_or_else(|| {
-                    std::env::current_dir()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|_| "<unknown>".to_string())
-                }),
-            policy,
-            scenario: Some(scenario),
-            steps: Some(step_results),
-            final_observation,
-            exit_status,
-            error: run_error.map(|err| err.to_error_info()),
-        };
-
-        if let Some(writer) = artifacts.as_mut() {
-            writer.write_run_result(&run_result)?;
-        }
-
-        // Emit run completed event
         emit_progress(
             progress.as_ref(),
-            ProgressEvent::RunCompleted {
-                run_id,
-                success: run_result.status == RunStatus::Passed,
-                duration_ms: run_result.ended_at_ms,
+            ProgressEvent::StepStarted {
+                step_id: step.id,
+                step_index: step_index + 1,
+                name: step.name.clone(),
             },
         );
 
-        Ok(run_result)
-    })();
+        let step_started_ms = elapsed_ms(run_started);
+        let exec_result = execute_step(
+            session,
+            step,
+            policy,
+            effective_policy,
+            artifacts,
+            &mut output_bytes,
+            step_started_ms,
+            run_started,
+        )?;
 
-    if let Err(err) = &result {
-        // Emit run completed event for error case
+        let step_ended_ms = elapsed_ms(run_started);
+        emit_progress(
+            progress.as_ref(),
+            ProgressEvent::StepCompleted {
+                step_id: step.id,
+                name: step.name.clone(),
+                status: exec_result.step_result.status.clone(),
+                duration_ms: step_ended_ms - step_started_ms,
+                assertions: exec_result.step_result.assertions.clone(),
+            },
+        );
+
+        if exec_result.run_error.is_some() {
+            run_error = exec_result.run_error;
+        }
+        step_results.push(exec_result.step_result);
+    }
+
+    Ok((step_results, run_error))
+}
+
+/// Build the final run result for a scenario.
+#[allow(clippy::too_many_arguments)]
+fn build_scenario_result(
+    scenario: &Scenario,
+    policy: &Policy,
+    run_id: RunId,
+    run_started: &Instant,
+    step_results: Vec<StepResult>,
+    final_observation: Option<crate::model::Observation>,
+    exit_status: Option<ExitStatus>,
+    run_error: Option<RunnerError>,
+) -> RunResult {
+    let status = if step_results
+        .iter()
+        .all(|s| matches!(s.status, StepStatus::Passed))
+    {
+        RunStatus::Passed
+    } else {
+        RunStatus::Failed
+    };
+
+    RunResult {
+        run_result_version: 1,
+        protocol_version: PROTOCOL_VERSION,
+        run_id,
+        status,
+        started_at_ms: 0,
+        ended_at_ms: elapsed_ms(run_started),
+        command: scenario.run.command.clone(),
+        args: scenario.run.args.clone(),
+        cwd: get_cwd_string(scenario.run.cwd.clone(), policy.fs.working_dir.as_ref()),
+        policy: policy.clone(),
+        scenario: Some(scenario.clone()),
+        steps: Some(step_results),
+        final_observation,
+        exit_status,
+        error: run_error.map(|err| err.to_error_info()),
+    }
+}
+
+/// Handle scenario result (emit events and write error artifacts if needed).
+#[allow(clippy::ref_option)]
+fn handle_scenario_result(
+    result: &RunnerResult<RunResult>,
+    scenario: &Scenario,
+    run_id: RunId,
+    run_started: &Instant,
+    progress: &Option<Arc<dyn ProgressCallback>>,
+    artifacts: &mut Option<ArtifactsWriter>,
+    policy_for_error: &Option<Policy>,
+) {
+    if let Err(err) = result {
         emit_progress(
             progress.as_ref(),
             ProgressEvent::RunCompleted {
                 run_id,
                 success: false,
-                duration_ms: elapsed_ms(&run_started),
+                duration_ms: elapsed_ms(run_started),
             },
         );
 
@@ -872,21 +1067,12 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
                 run_id,
                 status: RunStatus::Errored,
                 started_at_ms: 0,
-                ended_at_ms: elapsed_ms(&run_started),
-                command: scenario_clone.run.command.clone(),
-                args: scenario_clone.run.args.clone(),
-                cwd: scenario_clone
-                    .run
-                    .cwd
-                    .clone()
-                    .or_else(|| policy.fs.working_dir.clone())
-                    .unwrap_or_else(|| {
-                        std::env::current_dir()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_else(|_| "<unknown>".to_string())
-                    }),
+                ended_at_ms: elapsed_ms(run_started),
+                command: scenario.run.command.clone(),
+                args: scenario.run.args.clone(),
+                cwd: get_cwd_string(scenario.run.cwd.clone(), policy.fs.working_dir.as_ref()),
                 policy,
-                scenario: Some(scenario_clone),
+                scenario: Some(scenario.clone()),
                 steps: None,
                 final_observation: None,
                 exit_status: None,
@@ -895,11 +1081,6 @@ pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<
             let _ = writer.write_run_result(&run_result);
         }
     }
-
-    // cleanup_guard will be dropped here, cleaning up sandbox profile if any
-    drop(cleanup_guard);
-
-    result
 }
 
 /// Run a single command under policy control.
@@ -938,190 +1119,239 @@ pub fn run_exec_with_options(
     let run_id = RunId::new();
     let run_started = Instant::now();
     let mut artifacts: Option<ArtifactsWriter> = None;
-
-    // RAII guard for sandbox profile cleanup - ensures cleanup even on panic
     let mut cleanup_guard = SandboxCleanupGuard::new(None);
 
-    let result: RunnerResult<RunResult> = (|| {
-        validate_fs_policy(&policy.fs)?;
-        validate_artifacts_policy(&policy)?;
+    let result = run_exec_inner(
+        &command,
+        &args,
+        &cwd,
+        &policy,
+        &options,
+        run_id,
+        &run_started,
+        &mut artifacts,
+        &mut cleanup_guard,
+    );
 
-        let artifacts_config = resolve_artifacts_config(&policy, options.artifacts);
-        let artifacts_dir = artifacts_config.as_ref().map(|config| config.dir.clone());
+    handle_exec_error(
+        &result,
+        &command,
+        &args,
+        &cwd,
+        &policy,
+        run_id,
+        &run_started,
+        &mut artifacts,
+    );
+    drop(cleanup_guard);
+    result
+}
 
-        validate_write_access(&policy, artifacts_dir.as_deref())?;
+/// Inner implementation of `run_exec_with_options`.
+#[allow(clippy::too_many_arguments, clippy::ref_option)]
+fn run_exec_inner(
+    command: &str,
+    args: &[String],
+    cwd: &Option<String>,
+    policy: &Policy,
+    options: &RunnerOptions,
+    run_id: RunId,
+    run_started: &Instant,
+    artifacts: &mut Option<ArtifactsWriter>,
+    cleanup_guard: &mut SandboxCleanupGuard,
+) -> RunnerResult<RunResult> {
+    let artifacts_dir = setup_exec_artifacts(policy, options, run_id, artifacts)?;
+    validate_policy(policy)?;
 
-        if let Some(config) = artifacts_config {
-            validate_artifacts_dir(&config.dir, &policy.fs)?;
-            let mut writer = ArtifactsWriter::new(run_id, config)?;
-            writer.write_normalization(&NormalizationRecord {
-                normalization_version: NORMALIZATION_VERSION,
-                filters: Vec::new(),
-                strict: false,
-                source: crate::model::NormalizationSource::None,
-                rules: Vec::new(),
-            })?;
-            artifacts = Some(writer);
+    let effective_cwd = cwd.clone().or_else(|| policy.fs.working_dir.clone());
+    validate_exec_config(command, args, &effective_cwd, policy)?;
+
+    if let Some(writer) = artifacts.as_mut() {
+        writer.write_policy(policy)?;
+    }
+
+    let mut session = spawn_exec_session(
+        command,
+        args,
+        &effective_cwd,
+        policy,
+        &artifacts_dir,
+        run_id,
+        cleanup_guard,
+    )?;
+    let deadline = Instant::now() + Duration::from_millis(policy.budgets.max_runtime_ms);
+    let (final_observation, exit_status) =
+        poll_exec_until_exit(&mut session, policy, artifacts, deadline)?;
+
+    let run_result = build_exec_result(
+        command,
+        args,
+        &effective_cwd,
+        policy,
+        run_id,
+        run_started,
+        final_observation,
+        exit_status,
+    );
+
+    if let Some(writer) = artifacts.as_mut() {
+        if let Some(obs) = &run_result.final_observation {
+            writer.write_snapshot(&obs.screen)?;
+            if let Some(delta) = &obs.transcript_delta {
+                writer.write_transcript(delta)?;
+            }
         }
+        writer.write_run_result(&run_result)?;
+        writer.flush_checksums()?;
+    }
 
-        validate_policy(&policy)?;
-        let effective_policy = EffectivePolicy::new(policy.clone());
-        let cwd = cwd.clone().or_else(|| policy.fs.working_dir.clone());
-        let run_config = RunConfig {
-            command: command.clone(),
-            args: args.clone(),
-            cwd: cwd.clone(),
-            initial_size: TerminalSize::default(),
-            policy: crate::model::scenario::PolicyRef::Inline(policy.clone()),
-        };
-        effective_policy.validate_run_config(&run_config)?;
+    Ok(run_result)
+}
 
-        if let Some(writer) = artifacts.as_mut() {
-            writer.write_policy(&policy)?;
-        }
+/// Setup artifacts for exec command.
+fn setup_exec_artifacts(
+    policy: &Policy,
+    options: &RunnerOptions,
+    run_id: RunId,
+    artifacts: &mut Option<ArtifactsWriter>,
+) -> RunnerResult<Option<PathBuf>> {
+    validate_fs_policy(&policy.fs)?;
+    validate_artifacts_policy(policy)?;
 
-        let spawn = build_spawn_command(&policy, &command, &args, artifacts_dir.as_ref(), run_id)?;
-        cleanup_guard.path = spawn.cleanup_path.clone();
+    let artifacts_config = resolve_artifacts_config(policy, options.artifacts.clone());
+    let artifacts_dir = artifacts_config.as_ref().map(|config| config.dir.clone());
+    validate_write_access(policy, artifacts_dir.as_deref())?;
 
-        let mut session = Session::spawn(SessionConfig {
-            command: spawn.command,
-            args: spawn.args,
-            cwd: cwd.clone(),
-            size: TerminalSize::default(),
-            run_id,
-            env: policy.env.clone(),
+    if let Some(config) = artifacts_config {
+        validate_artifacts_dir(&config.dir, &policy.fs)?;
+        let mut writer = ArtifactsWriter::new(run_id, config)?;
+        writer.write_normalization(&NormalizationRecord {
+            normalization_version: NORMALIZATION_VERSION,
+            filters: Vec::new(),
+            strict: false,
+            source: crate::model::NormalizationSource::None,
+            rules: Vec::new(),
         })?;
+        *artifacts = Some(writer);
+    }
 
-        let mut output_bytes: u64 = 0;
-        let max_runtime = Duration::from_millis(policy.budgets.max_runtime_ms);
-        let deadline = Instant::now() + max_runtime;
+    Ok(artifacts_dir)
+}
 
-        let mut final_observation = session.observe(Duration::from_millis(50))?;
-        enforce_exec_budgets(&mut session, &final_observation, &mut output_bytes, &policy)?;
+/// Validate exec run configuration.
+#[allow(clippy::ref_option)]
+fn validate_exec_config(
+    command: &str,
+    args: &[String],
+    cwd: &Option<String>,
+    policy: &Policy,
+) -> RunnerResult<()> {
+    let effective_policy = EffectivePolicy::new(policy.clone());
+    let run_config = RunConfig {
+        command: command.to_string(),
+        args: args.to_vec(),
+        cwd: cwd.clone(),
+        initial_size: TerminalSize::default(),
+        policy: crate::model::scenario::PolicyRef::Inline(policy.clone()),
+    };
+    effective_policy.validate_run_config(&run_config)
+}
+
+/// Spawn a session for exec command.
+#[allow(clippy::ref_option)]
+fn spawn_exec_session(
+    command: &str,
+    args: &[String],
+    cwd: &Option<String>,
+    policy: &Policy,
+    artifacts_dir: &Option<PathBuf>,
+    run_id: RunId,
+    cleanup_guard: &mut SandboxCleanupGuard,
+) -> RunnerResult<Session> {
+    let spawn = build_spawn_command(policy, command, args, artifacts_dir.as_ref(), run_id)?;
+    cleanup_guard.path = spawn.cleanup_path.clone();
+
+    Session::spawn(SessionConfig {
+        command: spawn.command,
+        args: spawn.args,
+        cwd: cwd.clone(),
+        size: TerminalSize::default(),
+        run_id,
+        env: policy.env.clone(),
+    })
+}
+
+/// Build the run result for exec command.
+#[allow(clippy::too_many_arguments, clippy::ref_option)]
+fn build_exec_result(
+    command: &str,
+    args: &[String],
+    cwd: &Option<String>,
+    policy: &Policy,
+    run_id: RunId,
+    run_started: &Instant,
+    final_observation: crate::model::Observation,
+    exit_status: ExitStatus,
+) -> RunResult {
+    let status = if exit_status.success {
+        RunStatus::Passed
+    } else {
+        RunStatus::Failed
+    };
+    let error = if status == RunStatus::Failed {
+        Some(crate::model::ErrorInfo {
+            code: "E_PROCESS_EXIT".to_string(),
+            message: "process exited unsuccessfully".to_string(),
+            context: None,
+        })
+    } else {
+        None
+    };
+
+    RunResult {
+        run_result_version: 1,
+        protocol_version: PROTOCOL_VERSION,
+        run_id,
+        status,
+        started_at_ms: 0,
+        ended_at_ms: elapsed_ms(run_started),
+        command: command.to_string(),
+        args: args.to_vec(),
+        cwd: get_cwd_string(cwd.clone(), policy.fs.working_dir.as_ref()),
+        policy: policy.clone(),
+        scenario: None,
+        steps: None,
+        final_observation: Some(final_observation),
+        exit_status: Some(exit_status),
+        error,
+    }
+}
+
+/// Handle exec error by writing error artifacts.
+#[allow(clippy::too_many_arguments, clippy::ref_option)]
+fn handle_exec_error(
+    result: &RunnerResult<RunResult>,
+    command: &str,
+    args: &[String],
+    cwd: &Option<String>,
+    policy: &Policy,
+    run_id: RunId,
+    run_started: &Instant,
+    artifacts: &mut Option<ArtifactsWriter>,
+) {
+    if let Err(err) = result {
         if let Some(writer) = artifacts.as_mut() {
-            writer.write_observation(&final_observation)?;
-        }
-
-        let exit_status = loop {
-            if let Some(status) = session.wait_for_exit(Duration::from_millis(0))? {
-                // Capture final observation after exit to ensure complete terminal state.
-                // There may be output buffered between our last observe and the exit.
-                let observation = session.observe(Duration::from_millis(10))?;
-                if let Some(writer) = artifacts.as_mut() {
-                    writer.write_observation(&observation)?;
-                }
-                final_observation = observation;
-
-                // Exit codes are typically 0-255, safe to cast
-                #[allow(clippy::cast_possible_wrap)]
-                let code = status.exit_code() as i32;
-                break ExitStatus {
-                    success: status.success(),
-                    exit_code: Some(code),
-                    signal: None,
-                    terminated_by_harness: false,
-                };
-            }
-
-            if Instant::now() > deadline {
-                let termination = session.terminate_process_group(Duration::from_millis(200));
-                let context = match termination {
-                    Ok(_) => serde_json::json!({"max_runtime_ms": policy.budgets.max_runtime_ms}),
-                    Err(err) => serde_json::json!({
-                        "max_runtime_ms": policy.budgets.max_runtime_ms,
-                        "termination_error": err.to_string()
-                    }),
-                };
-                return Err(RunnerError::timeout(
-                    "E_TIMEOUT",
-                    "run exceeded max runtime budget",
-                    context,
-                ));
-            }
-
-            let observation = session.observe(Duration::from_millis(50))?;
-            enforce_exec_budgets(&mut session, &observation, &mut output_bytes, &policy)?;
-            if let Some(writer) = artifacts.as_mut() {
-                writer.write_observation(&observation)?;
-            }
-            // Track the latest observation state. The final assignment before exit
-            // is overwritten by the post-exit observation, but intermediate values
-            // are used if we continue looping before the process exits.
-            #[allow(unused_assignments)]
-            {
-                final_observation = observation;
-            }
-        };
-
-        let ended_at = elapsed_ms(&run_started);
-        let status = if exit_status.success {
-            RunStatus::Passed
-        } else {
-            RunStatus::Failed
-        };
-
-        let error = if status == RunStatus::Failed {
-            Some(crate::model::ErrorInfo {
-                code: "E_PROCESS_EXIT".to_string(),
-                message: "process exited unsuccessfully".to_string(),
-                context: None,
-            })
-        } else {
-            None
-        };
-
-        let run_result = RunResult {
-            run_result_version: 1,
-            protocol_version: PROTOCOL_VERSION,
-            run_id,
-            status,
-            started_at_ms: 0,
-            ended_at_ms: ended_at,
-            command: command.clone(),
-            args: args.clone(),
-            cwd: cwd.unwrap_or_else(|| {
-                std::env::current_dir()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|_| "<unknown>".to_string())
-            }),
-            policy: policy.clone(),
-            scenario: None,
-            steps: None,
-            final_observation: Some(final_observation),
-            exit_status: Some(exit_status),
-            error,
-        };
-
-        if let Some(writer) = artifacts.as_mut() {
-            writer.write_run_result(&run_result)?;
-            if let Some(observation) = &run_result.final_observation {
-                writer.write_snapshot(&observation.screen)?;
-                if let Some(delta) = &observation.transcript_delta {
-                    writer.write_transcript(delta)?;
-                }
-            }
-        }
-
-        Ok(run_result)
-    })();
-
-    if let Err(err) = &result {
-        if let Some(writer) = artifacts.as_mut() {
-            let _ = writer.write_policy(&policy);
+            let _ = writer.write_policy(policy);
             let run_result = RunResult {
                 run_result_version: 1,
                 protocol_version: PROTOCOL_VERSION,
                 run_id,
                 status: RunStatus::Errored,
                 started_at_ms: 0,
-                ended_at_ms: elapsed_ms(&run_started),
-                command: command.clone(),
-                args: args.clone(),
-                cwd: cwd.clone().unwrap_or_else(|| {
-                    std::env::current_dir()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|_| "<unknown>".to_string())
-                }),
+                ended_at_ms: elapsed_ms(run_started),
+                command: command.to_string(),
+                args: args.to_vec(),
+                cwd: get_cwd_string(cwd.clone(), policy.fs.working_dir.as_ref()),
                 policy: policy.clone(),
                 scenario: None,
                 steps: None,
@@ -1132,11 +1362,6 @@ pub fn run_exec_with_options(
             let _ = writer.write_run_result(&run_result);
         }
     }
-
-    // cleanup_guard will be dropped here, cleaning up sandbox profile if any
-    drop(cleanup_guard);
-
-    result
 }
 
 fn validate_policy(policy: &Policy) -> RunnerResult<()> {

@@ -160,6 +160,10 @@ fn generate_commands() -> BTreeMap<String, CommandHelp> {
     commands
 }
 
+/// Generate schema documentation.
+///
+/// This function builds static schema definitions - allowed to be long since it's declarative data.
+#[allow(clippy::too_many_lines)]
 fn generate_schemas() -> BTreeMap<String, SchemaHelp> {
     let mut schemas = BTreeMap::new();
 
@@ -345,6 +349,10 @@ fn generate_schemas() -> BTreeMap<String, SchemaHelp> {
     schemas
 }
 
+/// Generate error code documentation.
+///
+/// This function builds static error code definitions - allowed to be long since it's declarative data.
+#[allow(clippy::too_many_lines)]
 fn generate_error_codes() -> BTreeMap<String, ErrorCodeHelp> {
     let mut codes = BTreeMap::new();
 

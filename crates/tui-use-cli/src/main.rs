@@ -252,46 +252,21 @@ fn main() -> Result<()> {
             ack_unsafe_write,
             strict_write,
             command,
-        } => {
-            let (cmd, args) = split_command(command)?;
-            let mut policy = match policy {
-                Some(path) => load_policy_file(&path)?,
-                None => Policy::default(),
-            };
-            apply_cli_policy_overrides(
-                &mut policy,
-                no_sandbox,
-                ack_unsafe_sandbox,
-                enable_network,
-                ack_unsafe_network,
-                ack_unsafe_write,
-                strict_write,
-            );
-            if let Some(dir) = cwd.as_ref() {
-                if !std::path::Path::new(dir).is_absolute() {
-                    return emit_cli_error(json, "--cwd must be an absolute path");
-                }
-            }
-            if explain_policy {
-                let cwd = cwd.clone().or_else(|| policy.fs.working_dir.clone());
-                let run_config = tui_use::model::RunConfig {
-                    command: cmd.clone(),
-                    args: args.clone(),
-                    cwd,
-                    initial_size: tui_use::model::TerminalSize::default(),
-                    policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
-                };
-                let explanation = explain_policy_for_run_config(&policy, &run_config);
-                emit_explanation(json, &explanation)?;
-                return Ok(());
-            }
-            let options = RunnerOptions {
-                artifacts: artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite }),
-                progress: None,
-            };
-            let result = run_exec_with_options(cmd, args, cwd, policy, options);
-            emit_result(json, result)
-        }
+        } => cmd_exec(
+            json,
+            policy,
+            explain_policy,
+            cwd,
+            artifacts,
+            overwrite,
+            no_sandbox,
+            ack_unsafe_sandbox,
+            enable_network,
+            ack_unsafe_network,
+            ack_unsafe_write,
+            strict_write,
+            command,
+        ),
         Commands::Run {
             json,
             scenario,
@@ -306,96 +281,29 @@ fn main() -> Result<()> {
             ack_unsafe_network,
             ack_unsafe_write,
             strict_write,
-        } => {
-            let mut scenario = load_scenario(scenario.to_str().unwrap_or(""))?;
-            let mut policy = tui_use::scenario::load_policy_ref(&scenario.run.policy)?;
-            apply_cli_policy_overrides(
-                &mut policy,
-                no_sandbox,
-                ack_unsafe_sandbox,
-                enable_network,
-                ack_unsafe_network,
-                ack_unsafe_write,
-                strict_write,
-            );
-            if let Some(dir) = scenario.run.cwd.as_ref() {
-                if !std::path::Path::new(dir).is_absolute() {
-                    return emit_cli_error(json, "scenario cwd must be an absolute path");
-                }
-            }
-            if explain_policy {
-                let run_config = tui_use::model::RunConfig {
-                    command: scenario.run.command.clone(),
-                    args: scenario.run.args.clone(),
-                    cwd: scenario.run.cwd.clone(),
-                    initial_size: scenario.run.initial_size.clone(),
-                    policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
-                };
-                let explanation = explain_policy_for_run_config(&policy, &run_config);
-                emit_explanation(json, &explanation)?;
-                return Ok(());
-            }
-            scenario.run.policy = tui_use::model::scenario::PolicyRef::Inline(policy);
-
-            // TUI mode runs the scenario in an interactive terminal UI
-            if tui {
-                if verbose || json {
-                    return emit_cli_error(
-                        json,
-                        "--tui cannot be combined with --verbose or --json",
-                    );
-                }
-                let artifacts_config =
-                    artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite });
-                return tui_mode::run_tui(scenario, artifacts_config);
-            }
-
-            let progress_callback = if verbose {
-                Some(Arc::new(progress::VerboseProgress::new())
-                    as Arc<dyn tui_use::runner::ProgressCallback>)
-            } else {
-                None
-            };
-            let options = RunnerOptions {
-                artifacts: artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite }),
-                progress: progress_callback,
-            };
-            let result = run_scenario(scenario, options);
-            emit_result(json, result)
-        }
+        } => cmd_run(
+            json,
+            scenario,
+            explain_policy,
+            verbose,
+            tui,
+            artifacts,
+            overwrite,
+            no_sandbox,
+            ack_unsafe_sandbox,
+            enable_network,
+            ack_unsafe_network,
+            ack_unsafe_write,
+            strict_write,
+        ),
         Commands::Driver {
             stdio,
             json,
             strict_write,
             ack_unsafe_write,
             command,
-        } => {
-            if !stdio || !json {
-                return emit_cli_error(json, "driver requires --stdio --json");
-            }
-            let (cmd, args) = split_command(command)?;
-            let mut policy = Policy::default();
-            apply_cli_policy_overrides(
-                &mut policy,
-                true,
-                true,
-                false,
-                true,
-                ack_unsafe_write,
-                strict_write,
-            );
-            run_driver(cmd, args, policy)
-        }
-        Commands::ProtocolHelp { json } => {
-            let help = protocol_help::generate_protocol_help();
-            if json {
-                let output = serde_json::to_string_pretty(&help).into_diagnostic()?;
-                println!("{output}");
-            } else {
-                print_protocol_help_text(&help);
-            }
-            Ok(())
-        }
+        } => cmd_driver(stdio, json, strict_write, ack_unsafe_write, command),
+        Commands::ProtocolHelp { json } => cmd_protocol_help(json),
         Commands::Replay {
             json,
             artifacts,
@@ -404,77 +312,275 @@ fn main() -> Result<()> {
             explain,
             require_events,
             require_checksums,
-        } => {
-            let has_none = normalize
-                .iter()
-                .any(|filter| matches!(filter, NormalizeFilterArg::None));
-            if has_none && normalize.len() > 1 {
-                return emit_cli_error(
-                    json,
-                    "--normalize none cannot be combined with other filters",
-                );
-            }
-            if strict && !normalize.is_empty() && !has_none {
-                return emit_cli_error(json, "--strict cannot be combined with --normalize");
-            }
-            let has_all = normalize
-                .iter()
-                .any(|filter| matches!(filter, NormalizeFilterArg::All));
-            if has_all && normalize.len() > 1 {
-                return emit_cli_error(
-                    json,
-                    "--normalize all cannot be combined with other filters",
-                );
-            }
-            let filters = if normalize.is_empty() || has_all {
-                None
-            } else if has_none {
-                Some(Vec::new())
-            } else {
-                Some(normalize.into_iter().map(|f| f.into()).collect())
-            };
-            let options = tui_use::replay::ReplayOptions {
-                strict,
-                filters,
-                require_events,
-                require_checksums,
-            };
-            if explain {
-                let explanation = tui_use::replay::explain_replay(&artifacts, options)?;
-                if json {
-                    let payload = serde_json::to_string(&explanation).into_diagnostic()?;
-                    println!("{payload}");
-                } else {
-                    eprintln!("replay normalization: {explanation:?}");
-                }
-                return Ok(());
-            }
-            let result = tui_use::replay::replay_artifacts(&artifacts, options);
-            emit_result(json, result)
-        }
-        Commands::ReplayReport { json, artifacts } => {
-            let report = tui_use::replay::read_replay_report(&artifacts)?;
-            if json {
-                let payload = serde_json::to_string(&report).into_diagnostic()?;
-                println!("{payload}");
-            } else {
-                eprintln!("replay report: {}", report.dir);
-            }
-            Ok(())
-        }
-        Commands::Completions { shell } => {
-            let mut cmd = Cli::command();
-            let name = cmd.get_name().to_string();
-            generate(shell, &mut cmd, name, &mut io::stdout());
-            Ok(())
-        }
-        Commands::Trace { artifacts, output } => {
-            let output_path = output.unwrap_or_else(|| PathBuf::from("trace.html"));
-            trace::generate_trace(&artifacts, &output_path)?;
-            eprintln!("trace written to: {}", output_path.display());
-            Ok(())
+        } => cmd_replay(
+            json,
+            artifacts,
+            strict,
+            normalize,
+            explain,
+            require_events,
+            require_checksums,
+        ),
+        Commands::ReplayReport { json, artifacts } => cmd_replay_report(json, artifacts),
+        Commands::Completions { shell } => cmd_completions(shell),
+        Commands::Trace { artifacts, output } => cmd_trace(artifacts, output),
+    }
+}
+
+// =============================================================================
+// Command Handlers
+// =============================================================================
+
+/// Handle the exec command.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+fn cmd_exec(
+    json: bool,
+    policy: Option<PathBuf>,
+    explain_policy: bool,
+    cwd: Option<String>,
+    artifacts: Option<PathBuf>,
+    overwrite: bool,
+    no_sandbox: bool,
+    ack_unsafe_sandbox: bool,
+    enable_network: bool,
+    ack_unsafe_network: bool,
+    ack_unsafe_write: bool,
+    strict_write: bool,
+    command: Vec<String>,
+) -> Result<()> {
+    let (cmd, args) = split_command(command)?;
+    let mut policy = match policy {
+        Some(path) => load_policy_file(&path)?,
+        None => Policy::default(),
+    };
+    apply_cli_policy_overrides(
+        &mut policy,
+        no_sandbox,
+        ack_unsafe_sandbox,
+        enable_network,
+        ack_unsafe_network,
+        ack_unsafe_write,
+        strict_write,
+    );
+    if let Some(dir) = cwd.as_ref() {
+        if !std::path::Path::new(dir).is_absolute() {
+            return emit_cli_error(json, "--cwd must be an absolute path");
         }
     }
+    if explain_policy {
+        let cwd = cwd.clone().or_else(|| policy.fs.working_dir.clone());
+        let run_config = tui_use::model::RunConfig {
+            command: cmd.clone(),
+            args: args.clone(),
+            cwd,
+            initial_size: tui_use::model::TerminalSize::default(),
+            policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+        };
+        let explanation = explain_policy_for_run_config(&policy, &run_config);
+        emit_explanation(json, &explanation)?;
+        return Ok(());
+    }
+    let options = RunnerOptions {
+        artifacts: artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite }),
+        progress: None,
+    };
+    let result = run_exec_with_options(cmd, args, cwd, policy, options);
+    emit_result(json, result)
+}
+
+/// Handle the run command.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+fn cmd_run(
+    json: bool,
+    scenario_path: PathBuf,
+    explain_policy: bool,
+    verbose: bool,
+    tui: bool,
+    artifacts: Option<PathBuf>,
+    overwrite: bool,
+    no_sandbox: bool,
+    ack_unsafe_sandbox: bool,
+    enable_network: bool,
+    ack_unsafe_network: bool,
+    ack_unsafe_write: bool,
+    strict_write: bool,
+) -> Result<()> {
+    let mut scenario = load_scenario(scenario_path.to_str().unwrap_or(""))?;
+    let mut policy = tui_use::scenario::load_policy_ref(&scenario.run.policy)?;
+    apply_cli_policy_overrides(
+        &mut policy,
+        no_sandbox,
+        ack_unsafe_sandbox,
+        enable_network,
+        ack_unsafe_network,
+        ack_unsafe_write,
+        strict_write,
+    );
+    if let Some(dir) = scenario.run.cwd.as_ref() {
+        if !std::path::Path::new(dir).is_absolute() {
+            return emit_cli_error(json, "scenario cwd must be an absolute path");
+        }
+    }
+    if explain_policy {
+        let run_config = tui_use::model::RunConfig {
+            command: scenario.run.command.clone(),
+            args: scenario.run.args.clone(),
+            cwd: scenario.run.cwd.clone(),
+            initial_size: scenario.run.initial_size.clone(),
+            policy: tui_use::model::scenario::PolicyRef::Inline(policy.clone()),
+        };
+        let explanation = explain_policy_for_run_config(&policy, &run_config);
+        emit_explanation(json, &explanation)?;
+        return Ok(());
+    }
+    scenario.run.policy = tui_use::model::scenario::PolicyRef::Inline(policy);
+
+    // TUI mode runs the scenario in an interactive terminal UI
+    if tui {
+        if verbose || json {
+            return emit_cli_error(json, "--tui cannot be combined with --verbose or --json");
+        }
+        let artifacts_config = artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite });
+        return tui_mode::run_tui(scenario, artifacts_config);
+    }
+
+    let progress_callback = if verbose {
+        Some(Arc::new(progress::VerboseProgress::new())
+            as Arc<dyn tui_use::runner::ProgressCallback>)
+    } else {
+        None
+    };
+    let options = RunnerOptions {
+        artifacts: artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite }),
+        progress: progress_callback,
+    };
+    let result = run_scenario(scenario, options);
+    emit_result(json, result)
+}
+
+/// Handle the driver command.
+fn cmd_driver(
+    stdio: bool,
+    json: bool,
+    strict_write: bool,
+    ack_unsafe_write: bool,
+    command: Vec<String>,
+) -> Result<()> {
+    if !stdio || !json {
+        return emit_cli_error(json, "driver requires --stdio --json");
+    }
+    let (cmd, args) = split_command(command)?;
+    let mut policy = Policy::default();
+    apply_cli_policy_overrides(
+        &mut policy,
+        true,
+        true,
+        false,
+        true,
+        ack_unsafe_write,
+        strict_write,
+    );
+    run_driver(cmd, args, policy)
+}
+
+/// Handle the protocol-help command.
+fn cmd_protocol_help(json: bool) -> Result<()> {
+    let help = protocol_help::generate_protocol_help();
+    if json {
+        let output = serde_json::to_string_pretty(&help).into_diagnostic()?;
+        println!("{output}");
+    } else {
+        print_protocol_help_text(&help);
+    }
+    Ok(())
+}
+
+/// Handle the replay command.
+#[allow(clippy::fn_params_excessive_bools)]
+fn cmd_replay(
+    json: bool,
+    artifacts: PathBuf,
+    strict: bool,
+    normalize: Vec<NormalizeFilterArg>,
+    explain: bool,
+    require_events: bool,
+    require_checksums: bool,
+) -> Result<()> {
+    let has_none = normalize
+        .iter()
+        .any(|filter| matches!(filter, NormalizeFilterArg::None));
+    if has_none && normalize.len() > 1 {
+        return emit_cli_error(
+            json,
+            "--normalize none cannot be combined with other filters",
+        );
+    }
+    if strict && !normalize.is_empty() && !has_none {
+        return emit_cli_error(json, "--strict cannot be combined with --normalize");
+    }
+    let has_all = normalize
+        .iter()
+        .any(|filter| matches!(filter, NormalizeFilterArg::All));
+    if has_all && normalize.len() > 1 {
+        return emit_cli_error(
+            json,
+            "--normalize all cannot be combined with other filters",
+        );
+    }
+    let filters = if normalize.is_empty() || has_all {
+        None
+    } else if has_none {
+        Some(Vec::new())
+    } else {
+        Some(normalize.into_iter().map(|f| f.into()).collect())
+    };
+    let options = tui_use::replay::ReplayOptions {
+        strict,
+        filters,
+        require_events,
+        require_checksums,
+    };
+    if explain {
+        let explanation = tui_use::replay::explain_replay(&artifacts, options)?;
+        if json {
+            let payload = serde_json::to_string(&explanation).into_diagnostic()?;
+            println!("{payload}");
+        } else {
+            eprintln!("replay normalization: {explanation:?}");
+        }
+        return Ok(());
+    }
+    let result = tui_use::replay::replay_artifacts(&artifacts, options);
+    emit_result(json, result)
+}
+
+/// Handle the replay-report command.
+fn cmd_replay_report(json: bool, artifacts: PathBuf) -> Result<()> {
+    let report = tui_use::replay::read_replay_report(&artifacts)?;
+    if json {
+        let payload = serde_json::to_string(&report).into_diagnostic()?;
+        println!("{payload}");
+    } else {
+        eprintln!("replay report: {}", report.dir);
+    }
+    Ok(())
+}
+
+/// Handle the completions command.
+#[allow(clippy::unnecessary_wraps)] // Consistent with other command handlers
+fn cmd_completions(shell: Shell) -> Result<()> {
+    let mut cmd = Cli::command();
+    let name = cmd.get_name().to_string();
+    generate(shell, &mut cmd, name, &mut io::stdout());
+    Ok(())
+}
+
+/// Handle the trace command.
+fn cmd_trace(artifacts: PathBuf, output: Option<PathBuf>) -> Result<()> {
+    let output_path = output.unwrap_or_else(|| PathBuf::from("trace.html"));
+    trace::generate_trace(&artifacts, &output_path)?;
+    eprintln!("trace written to: {}", output_path.display());
+    Ok(())
 }
 
 fn emit_result(json: bool, result: Result<tui_use::model::RunResult, RunnerError>) -> Result<()> {

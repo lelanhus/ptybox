@@ -11,6 +11,10 @@
 # Functions exceeding this trigger clippy::cognitive_complexity
 cognitive-complexity-threshold = 15
 
+# Maximum function length (default: 100, NASA recommends ~60)
+# Functions exceeding this trigger clippy::too_many_lines
+too-many-lines-threshold = 100
+
 # Type complexity threshold (default: 250)
 # Triggers clippy::type_complexity for overly complex types
 type-complexity-threshold = 200

@@ -59,7 +59,7 @@
 //!
 //! # Security
 //!
-//! Regex patterns are limited to [`MAX_REGEX_PATTERN_LEN`](crate::model::MAX_REGEX_PATTERN_LEN)
+//! Regex patterns are limited to [`MAX_REGEX_PATTERN_LEN`]
 //! characters to prevent `ReDoS` attacks.
 
 use crate::model::scenario::Assertion;
@@ -67,15 +67,243 @@ use crate::model::{Observation, ScreenSnapshot, MAX_REGEX_PATTERN_LEN};
 use serde_json::Value;
 
 // =============================================================================
-// Helpers
+// Types
 // =============================================================================
 
-/// Result type for assertion evaluation.
+/// Result type for assertion evaluation: (passed, `error_message`, context).
 type AssertionResult = (bool, Option<String>, Option<Value>);
 
-/// Get a screen line with bounds checking.
+// =============================================================================
+// Main Entry Point
+// =============================================================================
+
+/// Evaluate an assertion against an observation.
 ///
-/// Returns the line content if in bounds, or an error result if out of bounds.
+/// Returns a tuple of (passed, error message, context).
+#[must_use]
+pub fn evaluate(
+    observation: &Observation,
+    assertion: &Assertion,
+) -> (bool, Option<String>, Option<Value>) {
+    let screen_text = observation.screen.lines.join("\n");
+
+    match assertion.assertion_type.as_str() {
+        "screen_contains" => eval_screen_contains(&screen_text, assertion),
+        "regex_match" => eval_regex_match(&screen_text, assertion),
+        "cursor_at" => eval_cursor_at(observation, assertion),
+        "line_equals" => eval_line_equals(&observation.screen, assertion),
+        "line_contains" => eval_line_contains(&observation.screen, assertion),
+        "line_matches" => eval_line_matches(&observation.screen, assertion),
+        "not_contains" => eval_not_contains(&screen_text, assertion),
+        "screen_empty" => eval_screen_empty(observation),
+        "cursor_visible" => eval_cursor_visible(observation),
+        "cursor_hidden" => eval_cursor_hidden(observation),
+        _ => (false, Some("unsupported assertion".to_string()), None),
+    }
+}
+
+// =============================================================================
+// Assertion Handlers
+// =============================================================================
+
+fn eval_screen_contains(screen_text: &str, assertion: &Assertion) -> AssertionResult {
+    let text = get_text_field(assertion);
+    let passed = screen_text.contains(text);
+    let message = if passed {
+        None
+    } else {
+        Some(format!("screen did not contain '{text}'"))
+    };
+    (passed, message, None)
+}
+
+fn eval_regex_match(screen_text: &str, assertion: &Assertion) -> AssertionResult {
+    let pattern = get_pattern_field(assertion);
+
+    if let Some(err) = validate_pattern_length(pattern) {
+        return err;
+    }
+
+    match regex::Regex::new(pattern) {
+        Ok(re) => {
+            let passed = re.is_match(screen_text);
+            let message = if passed {
+                None
+            } else {
+                Some(format!("screen did not match '{pattern}'"))
+            };
+            (passed, message, None)
+        }
+        Err(err) => regex_error(err),
+    }
+}
+
+fn eval_cursor_at(observation: &Observation, assertion: &Assertion) -> AssertionResult {
+    let row_u64 = assertion
+        .payload
+        .get("row")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let col_u64 = assertion
+        .payload
+        .get("col")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    let Ok(row) = u16::try_from(row_u64) else {
+        return u16_overflow_error("row", row_u64);
+    };
+    let Ok(col) = u16::try_from(col_u64) else {
+        return u16_overflow_error("col", col_u64);
+    };
+
+    let cursor = &observation.screen.cursor;
+    let passed = cursor.row == row && cursor.col == col;
+    let message = if passed {
+        None
+    } else {
+        Some(format!("cursor at ({}, {})", cursor.row, cursor.col))
+    };
+    (passed, message, None)
+}
+
+fn eval_line_equals(screen: &ScreenSnapshot, assertion: &Assertion) -> AssertionResult {
+    let line_u64 = get_line_field(assertion);
+    let expected = get_text_field(assertion);
+
+    match get_screen_line(screen, line_u64) {
+        Ok(actual) => {
+            let passed = actual == expected;
+            let message = if passed {
+                None
+            } else {
+                Some(format!(
+                    "line {line_u64} was '{actual}', expected '{expected}'"
+                ))
+            };
+            (passed, message, None)
+        }
+        Err(result) => result,
+    }
+}
+
+fn eval_line_contains(screen: &ScreenSnapshot, assertion: &Assertion) -> AssertionResult {
+    let line_u64 = get_line_field(assertion);
+    let text = get_text_field(assertion);
+
+    match get_screen_line(screen, line_u64) {
+        Ok(actual) => {
+            let passed = actual.contains(text);
+            let message = if passed {
+                None
+            } else {
+                Some(format!("line {line_u64} did not contain '{text}'"))
+            };
+            (passed, message, None)
+        }
+        Err(result) => result,
+    }
+}
+
+fn eval_line_matches(screen: &ScreenSnapshot, assertion: &Assertion) -> AssertionResult {
+    let line_u64 = get_line_field(assertion);
+    let pattern = get_pattern_field(assertion);
+
+    if let Some(err) = validate_pattern_length(pattern) {
+        return err;
+    }
+
+    match get_screen_line(screen, line_u64) {
+        Ok(actual) => match regex::Regex::new(pattern) {
+            Ok(re) => {
+                let passed = re.is_match(actual);
+                let message = if passed {
+                    None
+                } else {
+                    Some(format!("line {line_u64} did not match '{pattern}'"))
+                };
+                (passed, message, None)
+            }
+            Err(err) => regex_error(err),
+        },
+        Err(result) => result,
+    }
+}
+
+fn eval_not_contains(screen_text: &str, assertion: &Assertion) -> AssertionResult {
+    let text = get_text_field(assertion);
+    let passed = !screen_text.contains(text);
+    let message = if passed {
+        None
+    } else {
+        Some(format!("screen unexpectedly contained '{text}'"))
+    };
+    (passed, message, None)
+}
+
+fn eval_screen_empty(observation: &Observation) -> AssertionResult {
+    let passed = observation
+        .screen
+        .lines
+        .iter()
+        .all(|line| line.trim().is_empty());
+    let message = if passed {
+        None
+    } else {
+        Some("screen is not empty".to_string())
+    };
+    (passed, message, None)
+}
+
+fn eval_cursor_visible(observation: &Observation) -> AssertionResult {
+    let passed = observation.screen.cursor.visible;
+    let message = if passed {
+        None
+    } else {
+        Some("cursor is not visible".to_string())
+    };
+    (passed, message, None)
+}
+
+fn eval_cursor_hidden(observation: &Observation) -> AssertionResult {
+    let passed = !observation.screen.cursor.visible;
+    let message = if passed {
+        None
+    } else {
+        Some("cursor is not hidden".to_string())
+    };
+    (passed, message, None)
+}
+
+// =============================================================================
+// Field Extractors
+// =============================================================================
+
+fn get_text_field(assertion: &Assertion) -> &str {
+    assertion
+        .payload
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn get_pattern_field(assertion: &Assertion) -> &str {
+    assertion
+        .payload
+        .get("pattern")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn get_line_field(assertion: &Assertion) -> u64 {
+    assertion
+        .payload
+        .get("line")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
+/// Get a screen line with bounds checking.
 fn get_screen_line(screen: &ScreenSnapshot, line_u64: u64) -> Result<&str, AssertionResult> {
     let line_num = usize::try_from(line_u64).map_err(|_| {
         (
@@ -98,249 +326,42 @@ fn get_screen_line(screen: &ScreenSnapshot, line_u64: u64) -> Result<&str, Asser
     ))
 }
 
-/// Evaluate an assertion against an observation.
-///
-/// Returns a tuple of (passed, error message, context).
-#[must_use]
-pub fn evaluate(
-    observation: &Observation,
-    assertion: &Assertion,
-) -> (bool, Option<String>, Option<Value>) {
-    // Pre-join screen text once to avoid repeated allocations
-    let screen_text = observation.screen.lines.join("\n");
+// =============================================================================
+// Error Helpers
+// =============================================================================
 
-    match assertion.assertion_type.as_str() {
-        "screen_contains" => {
-            let text = assertion
-                .payload
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let passed = screen_text.contains(text);
-            let message = if passed {
-                None
-            } else {
-                Some(format!("screen did not contain '{text}'"))
-            };
-            (passed, message, None)
-        }
-        "regex_match" => {
-            let pattern = assertion
-                .payload
-                .get("pattern")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if pattern.len() > MAX_REGEX_PATTERN_LEN {
-                return (
-                    false,
-                    Some(format!(
-                        "regex pattern exceeds maximum length of {MAX_REGEX_PATTERN_LEN} characters"
-                    )),
-                    Some(serde_json::json!({
-                        "pattern_length": pattern.len(),
-                        "max_length": MAX_REGEX_PATTERN_LEN
-                    })),
-                );
-            }
-            let regex = regex::Regex::new(pattern);
-            match regex {
-                Ok(re) => {
-                    let passed = re.is_match(&screen_text);
-                    let message = if passed {
-                        None
-                    } else {
-                        Some(format!("screen did not match '{pattern}'"))
-                    };
-                    (passed, message, None)
-                }
-                Err(err) => (
-                    false,
-                    Some("invalid regex".to_string()),
-                    Some(Value::String(err.to_string())),
-                ),
-            }
-        }
-        "cursor_at" => {
-            let row_u64 = assertion
-                .payload
-                .get("row")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let col_u64 = assertion
-                .payload
-                .get("col")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            // Validate bounds - values exceeding u16::MAX fail the assertion
-            let Ok(row) = u16::try_from(row_u64) else {
-                return (
-                    false,
-                    Some(format!(
-                        "row value {} exceeds maximum u16 value {}",
-                        row_u64,
-                        u16::MAX
-                    )),
-                    None,
-                );
-            };
-            let Ok(col) = u16::try_from(col_u64) else {
-                return (
-                    false,
-                    Some(format!(
-                        "col value {} exceeds maximum u16 value {}",
-                        col_u64,
-                        u16::MAX
-                    )),
-                    None,
-                );
-            };
-            let cursor = &observation.screen.cursor;
-            let passed = cursor.row == row && cursor.col == col;
-            let message = if passed {
-                None
-            } else {
-                Some(format!("cursor at ({}, {})", cursor.row, cursor.col))
-            };
-            (passed, message, None)
-        }
-        "line_equals" => {
-            let line_u64 = assertion
-                .payload
-                .get("line")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let expected = assertion
-                .payload
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            match get_screen_line(&observation.screen, line_u64) {
-                Ok(actual) => {
-                    let passed = actual == expected;
-                    let message = if passed {
-                        None
-                    } else {
-                        Some(format!(
-                            "line {line_u64} was '{actual}', expected '{expected}'"
-                        ))
-                    };
-                    (passed, message, None)
-                }
-                Err(result) => result,
-            }
-        }
-        "line_contains" => {
-            let line_u64 = assertion
-                .payload
-                .get("line")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let text = assertion
-                .payload
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            match get_screen_line(&observation.screen, line_u64) {
-                Ok(actual) => {
-                    let passed = actual.contains(text);
-                    let message = if passed {
-                        None
-                    } else {
-                        Some(format!("line {line_u64} did not contain '{text}'"))
-                    };
-                    (passed, message, None)
-                }
-                Err(result) => result,
-            }
-        }
-        "line_matches" => {
-            let line_u64 = assertion
-                .payload
-                .get("line")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let pattern = assertion
-                .payload
-                .get("pattern")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if pattern.len() > MAX_REGEX_PATTERN_LEN {
-                return (
-                    false,
-                    Some(format!(
-                        "regex pattern exceeds maximum length of {MAX_REGEX_PATTERN_LEN} characters"
-                    )),
-                    Some(serde_json::json!({
-                        "pattern_length": pattern.len(),
-                        "max_length": MAX_REGEX_PATTERN_LEN
-                    })),
-                );
-            }
-            match get_screen_line(&observation.screen, line_u64) {
-                Ok(actual) => match regex::Regex::new(pattern) {
-                    Ok(re) => {
-                        let passed = re.is_match(actual);
-                        let message = if passed {
-                            None
-                        } else {
-                            Some(format!("line {line_u64} did not match '{pattern}'"))
-                        };
-                        (passed, message, None)
-                    }
-                    Err(err) => (
-                        false,
-                        Some("invalid regex".to_string()),
-                        Some(Value::String(err.to_string())),
-                    ),
-                },
-                Err(result) => result,
-            }
-        }
-        "not_contains" => {
-            let text = assertion
-                .payload
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let passed = !screen_text.contains(text);
-            let message = if passed {
-                None
-            } else {
-                Some(format!("screen unexpectedly contained '{text}'"))
-            };
-            (passed, message, None)
-        }
-        "screen_empty" => {
-            let passed = observation
-                .screen
-                .lines
-                .iter()
-                .all(|line| line.trim().is_empty());
-            let message = if passed {
-                None
-            } else {
-                Some("screen is not empty".to_string())
-            };
-            (passed, message, None)
-        }
-        "cursor_visible" => {
-            let passed = observation.screen.cursor.visible;
-            let message = if passed {
-                None
-            } else {
-                Some("cursor is not visible".to_string())
-            };
-            (passed, message, None)
-        }
-        "cursor_hidden" => {
-            let passed = !observation.screen.cursor.visible;
-            let message = if passed {
-                None
-            } else {
-                Some("cursor is not hidden".to_string())
-            };
-            (passed, message, None)
-        }
-        _ => (false, Some("unsupported assertion".to_string()), None),
+fn validate_pattern_length(pattern: &str) -> Option<AssertionResult> {
+    if pattern.len() > MAX_REGEX_PATTERN_LEN {
+        Some((
+            false,
+            Some(format!(
+                "regex pattern exceeds maximum length of {MAX_REGEX_PATTERN_LEN} characters"
+            )),
+            Some(serde_json::json!({
+                "pattern_length": pattern.len(),
+                "max_length": MAX_REGEX_PATTERN_LEN
+            })),
+        ))
+    } else {
+        None
     }
+}
+
+fn regex_error(err: regex::Error) -> AssertionResult {
+    (
+        false,
+        Some("invalid regex".to_string()),
+        Some(Value::String(err.to_string())),
+    )
+}
+
+fn u16_overflow_error(field: &str, value: u64) -> AssertionResult {
+    (
+        false,
+        Some(format!(
+            "{field} value {value} exceeds maximum u16 value {}",
+            u16::MAX
+        )),
+        None,
+    )
 }

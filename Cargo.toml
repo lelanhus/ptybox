@@ -60,7 +60,7 @@ style = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 module_name_repetitions = "allow"  # Common in public APIs
 similar_names = "allow"            # Too aggressive for domain-specific naming
-too_many_lines = "allow"           # Arbitrary limit, prefer cognitive_complexity
+too_many_lines = "deny"            # NASA rule: functions should fit on one screen (100 lines)
 missing_errors_doc = "allow"       # Enable later once docs are complete
 struct_excessive_bools = "allow"   # Policy/Style structs legitimately have many bool flags
 single_match_else = "allow"        # Match is often clearer than if-let for complex arms
@@ -71,6 +71,9 @@ assigning_clones = "allow"         # Minor optimization, not worth enforcing
 map_unwrap_or = "allow"            # map().unwrap_or() often reads better
 redundant_closure_for_method_calls = "allow"  # Closures sometimes clearer
 case_sensitive_file_extension_comparisons = "allow"  # Intentional for .sh detection
+
+# ============ COMPLEXITY (NASA POWER OF 10) ============
+cognitive_complexity = "deny"      # NASA rule: limit branching complexity (threshold in clippy.toml)
 
 # ============ SECURITY-CRITICAL (FROM RESTRICTION GROUP) ============
 unwrap_used = "deny"
