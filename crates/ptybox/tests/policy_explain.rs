@@ -38,7 +38,7 @@ fn explain_policy_reports_denials() {
         args: vec!["hello".to_string()],
         cwd: Some("/tmp".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
 
     let explanation = explain_policy_for_run_config(&policy, &run);

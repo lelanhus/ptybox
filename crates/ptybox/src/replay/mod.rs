@@ -187,7 +187,7 @@ pub fn replay_artifacts(artifacts_dir: &Path, options: ReplayOptions) -> RunnerR
     let policy = load_policy_from_artifacts(artifacts_dir)?;
     let policy_replay = policy.replay.clone();
     let mut scenario = load_scenario_from_artifacts(artifacts_dir)?;
-    scenario.run.policy = crate::model::scenario::PolicyRef::Inline(policy);
+    scenario.run.policy = crate::model::scenario::PolicyRef::Inline(Box::new(policy));
 
     let replay_dir = artifacts_dir.join(format!("replay-{}", RunId::new()));
     let runner_options = RunnerOptions {

@@ -72,7 +72,7 @@ fn build_scenario() -> Scenario {
             args: vec!["hello".to_string()],
             cwd: None,
             initial_size: TerminalSize::default(),
-            policy: PolicyRef::Inline(policy),
+            policy: PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![Step {
             id: StepId::new(),
@@ -195,7 +195,7 @@ fn load_policy_ref_inline() {
         replay: ReplayPolicy::default(),
     };
 
-    let policy_ref = PolicyRef::Inline(policy.clone());
+    let policy_ref = PolicyRef::Inline(Box::new(policy.clone()));
     let loaded = ptybox::scenario::load_policy_ref(&policy_ref).unwrap();
 
     assert_eq!(loaded.policy_version, policy.policy_version);

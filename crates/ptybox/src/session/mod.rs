@@ -154,6 +154,7 @@ impl PayloadExt for serde_json::Value {
 ///     Ok(())
 /// }
 /// ```
+#[allow(clippy::struct_field_names)]
 pub struct Session {
     run_id: RunId,
     session_id: SessionId,

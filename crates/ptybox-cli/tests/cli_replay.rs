@@ -124,7 +124,7 @@ fn build_scenario(dir: &Path, policy: Policy) -> Scenario {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {
@@ -763,7 +763,7 @@ fn replay_policy_rules_allow_nondeterministic_output() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![Step {
             id: StepId::new(),

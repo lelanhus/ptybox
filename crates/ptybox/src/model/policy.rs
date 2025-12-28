@@ -17,9 +17,10 @@ pub const POLICY_VERSION: u32 = 4;
 ///
 /// - `Seatbelt`: Default on macOS, uses `sandbox-exec` for process isolation
 /// - `Disabled { ack }`: No sandboxing, requires `ack: true` to proceed
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SandboxMode {
     /// macOS Seatbelt sandbox (default).
+    #[default]
     Seatbelt,
     /// No sandboxing (requires acknowledgement).
     Disabled {
@@ -30,31 +31,20 @@ pub enum SandboxMode {
     },
 }
 
-impl Default for SandboxMode {
-    fn default() -> Self {
-        Self::Seatbelt
-    }
-}
-
 /// Network access policy with embedded acknowledgement.
 ///
 /// - `Disabled`: Network access disabled (default)
 /// - `Enabled { ack }`: Network access enabled, requires `ack: true`
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum NetworkPolicy {
     /// Network access disabled (default).
+    #[default]
     Disabled,
     /// Network access enabled (requires acknowledgement).
     Enabled {
         /// Explicit acknowledgement of network access security implications.
         ack: bool,
     },
-}
-
-impl Default for NetworkPolicy {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 /// Acknowledgement for unenforced network policy.

@@ -469,7 +469,7 @@ fn delay_output_fixture_wait_condition() {
             args: vec!["200".to_string(), "DELAYED_MESSAGE".to_string()],
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {
@@ -773,7 +773,7 @@ fn exec_timeout_includes_step_context() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![Step {
             id: StepId::new(),
@@ -833,7 +833,7 @@ fn scenario_assertion_failure_returns_correct_exit_code() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![Step {
             id: StepId::new(),
@@ -902,7 +902,7 @@ fn scenario_resize_action() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             // Resize to 40x120

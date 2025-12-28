@@ -57,7 +57,7 @@ pub struct RunConfig {
 #[serde(untagged)]
 pub enum PolicyRef {
     /// Inline policy object.
-    Inline(Policy),
+    Inline(Box<Policy>),
     /// Path to policy file.
     File { path: String },
 }

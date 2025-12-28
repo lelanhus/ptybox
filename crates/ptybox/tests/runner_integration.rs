@@ -52,7 +52,7 @@ fn create_scenario(steps: Vec<Step>, command: &str, args: Vec<String>) -> Scenar
             args,
             cwd: None,
             initial_size: TerminalSize::default(),
-            policy: PolicyRef::Inline(minimal_policy()),
+            policy: PolicyRef::Inline(Box::new(minimal_policy())),
         },
         steps,
     }
@@ -119,7 +119,7 @@ fn run_scenario_assertion_retry_success() {
             args: vec![],
             cwd: None,
             initial_size: TerminalSize::default(),
-            policy: PolicyRef::Inline(policy),
+            policy: PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             // Step 1: Send some text to cat
@@ -196,7 +196,7 @@ fn run_scenario_timeout_boundary() {
             args: vec!["10".to_string()], // Sleep for 10 seconds (way over budget)
             cwd: None,
             initial_size: TerminalSize::default(),
-            policy: PolicyRef::Inline(policy),
+            policy: PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![], // No steps - just let it run until timeout
     };

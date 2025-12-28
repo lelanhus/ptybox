@@ -640,7 +640,7 @@ fn await_scenario_exit(
         return Err(create_timeout_error(session, policy));
     }
 
-    let remaining = max_runtime - elapsed;
+    let remaining = max_runtime.saturating_sub(elapsed);
     match session.wait_for_exit(remaining)? {
         Some(status) => Ok(Some(convert_exit_status(status, false))),
         None => Err(create_timeout_error(session, policy)),
@@ -1252,7 +1252,7 @@ fn validate_exec_config(
         args: args.to_vec(),
         cwd: cwd.clone(),
         initial_size: TerminalSize::default(),
-        policy: crate::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: crate::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
     effective_policy.validate_run_config(&run_config)
 }

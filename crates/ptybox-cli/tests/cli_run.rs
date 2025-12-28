@@ -94,7 +94,7 @@ fn run_scenario_outputs_passed_run_result() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {
@@ -173,7 +173,7 @@ fn run_scenario_accepts_yaml() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {
@@ -239,7 +239,7 @@ fn run_scenario_supports_key_action() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {
@@ -308,7 +308,7 @@ fn run_scenario_supports_resize_action() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {
@@ -390,7 +390,7 @@ fn run_scenario_supports_wait_action() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {
@@ -464,7 +464,7 @@ fn run_scenario_retries_failed_steps() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {
@@ -539,7 +539,7 @@ fn run_scenario_is_deterministic_for_same_inputs() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {
@@ -630,7 +630,7 @@ fn run_timeout_includes_step_context() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {
@@ -707,7 +707,7 @@ fn run_writes_artifacts_on_assertion_failure() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![Step {
             id: StepId::new(),
@@ -763,7 +763,7 @@ fn run_rejects_relative_scenario_cwd() {
             args: Vec::new(),
             cwd: Some("relative".to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![Step {
             id: StepId::new(),
@@ -890,7 +890,7 @@ fn artifacts_layout_is_written() {
             args: Vec::new(),
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: vec![
             Step {

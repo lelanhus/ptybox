@@ -490,7 +490,7 @@ impl ScenarioBuilder {
                 args: self.args,
                 cwd: self.cwd,
                 initial_size: self.initial_size,
-                policy: PolicyRef::Inline(policy),
+                policy: PolicyRef::Inline(Box::new(policy)),
             },
             steps: self.steps,
         }

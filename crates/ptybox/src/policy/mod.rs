@@ -519,7 +519,7 @@ fn is_shell_command(command: &str, args: &[String]) -> bool {
     // - Ruby -c: syntax check only
     // - Perl -c: compile only (syntax check)
     // We only block shell executables themselves, not arbitrary -c usage.
-    shell_names.iter().any(|name| *name == base)
+    shell_names.contains(&base)
 }
 
 /// Blocked filesystem roots for security. Paths under these roots cannot be allowlisted.

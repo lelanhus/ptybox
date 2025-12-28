@@ -19,7 +19,7 @@ pub fn load_scenario_file(path: &str) -> RunnerResult<Scenario> {
 
 pub fn load_policy_ref(policy_ref: &PolicyRef) -> RunnerResult<Policy> {
     match policy_ref {
-        PolicyRef::Inline(policy) => Ok(policy.clone()),
+        PolicyRef::Inline(policy) => Ok(policy.as_ref().clone()),
         PolicyRef::File { path } => {
             let data = fs::read_to_string(path)
                 .map_err(|err| RunnerError::io("E_IO", "failed to read policy file", err))?;

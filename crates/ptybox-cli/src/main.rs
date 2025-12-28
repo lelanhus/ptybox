@@ -374,7 +374,7 @@ fn cmd_exec(
             args: args.clone(),
             cwd,
             initial_size: ptybox::model::TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
         };
         let explanation = explain_policy_for_run_config(&policy, &run_config);
         emit_explanation(json, &explanation)?;
@@ -427,13 +427,13 @@ fn cmd_run(
             args: scenario.run.args.clone(),
             cwd: scenario.run.cwd.clone(),
             initial_size: scenario.run.initial_size.clone(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
         };
         let explanation = explain_policy_for_run_config(&policy, &run_config);
         emit_explanation(json, &explanation)?;
         return Ok(());
     }
-    scenario.run.policy = ptybox::model::scenario::PolicyRef::Inline(policy);
+    scenario.run.policy = ptybox::model::scenario::PolicyRef::Inline(Box::new(policy));
 
     // TUI mode runs the scenario in an interactive terminal UI
     if tui {

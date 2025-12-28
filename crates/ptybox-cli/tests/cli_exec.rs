@@ -774,7 +774,7 @@ fn run_explain_policy_uses_scenario_config() {
             args: vec!["hello".to_string()],
             cwd: Some(dir.display().to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
         },
         steps: Vec::new(),
     };

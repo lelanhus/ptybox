@@ -132,7 +132,7 @@ fn extract_cells(screen: &vt100::Screen, rows: u16, cols: u16) -> Vec<Vec<Cell>>
 /// Convert a vt100 cell to our Cell model.
 fn vt_cell_to_cell(vt_cell: &vt100::Cell) -> Cell {
     Cell {
-        ch: vt_cell.contents().to_string(),
+        ch: vt_cell.contents().clone(),
         width: if vt_cell.is_wide() { 2 } else { 1 },
         style: Style {
             fg: convert_color(vt_cell.fgcolor()),

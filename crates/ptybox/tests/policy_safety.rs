@@ -118,7 +118,7 @@ fn run_config_rejects_relative_cwd() {
         args: vec![],
         cwd: Some("relative".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
@@ -148,7 +148,7 @@ fn run_config_rejects_cwd_outside_allowlist() {
         args: vec![],
         cwd: Some("/tmp/blocked".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
@@ -178,7 +178,7 @@ fn exec_policy_rejects_relative_allowed_executable() {
         args: vec![],
         cwd: Some("/tmp".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
@@ -477,7 +477,7 @@ fn shell_detection_blocks_direct_shell_invocation() {
             args: vec![],
             cwd: Some("/tmp".to_string()),
             initial_size: TerminalSize::default(),
-            policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
         };
         let err = EffectivePolicy::new(policy)
             .validate_run_config(&run)
@@ -514,7 +514,7 @@ fn shell_detection_blocks_sh_extension() {
         args: vec![],
         cwd: Some("/tmp".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
@@ -548,7 +548,7 @@ fn shell_detection_allows_interpreter_dash_c_flag() {
         args: vec!["-c".to_string(), "print('hello')".to_string()],
         cwd: Some("/tmp".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
     // This should succeed - Python -c is not shell execution
     let result = EffectivePolicy::new(policy).validate_run_config(&run);
@@ -581,7 +581,7 @@ fn shell_detection_blocks_shell_with_dash_c_flag() {
         args: vec!["-c".to_string(), "echo hello".to_string()],
         cwd: Some("/tmp".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
@@ -642,7 +642,7 @@ fn shell_detection_blocks_symlinked_shell() {
         args: vec![],
         cwd: Some("/tmp".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
     let err = EffectivePolicy::new(policy)
         .validate_run_config(&run)
@@ -677,7 +677,7 @@ fn shell_detection_allows_non_shell_commands() {
         args: vec!["hello".to_string()],
         cwd: Some("/tmp".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
     // Should succeed - echo is not a shell
     EffectivePolicy::new(policy)
@@ -707,7 +707,7 @@ fn shell_detection_allows_shells_when_enabled() {
         args: vec![],
         cwd: Some("/tmp".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
     // Should succeed when allow_shell is true
     EffectivePolicy::new(policy)
@@ -742,7 +742,7 @@ fn policy_handles_unicode_paths() {
         args: vec!["hello".to_string()],
         cwd: Some("/tmp/日本語ディレクトリ".to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
 
     // Should not panic - unicode paths are valid
@@ -784,7 +784,7 @@ fn policy_handles_very_long_paths() {
         args: vec!["hello".to_string()],
         cwd: Some(long_path.clone()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
 
     // Should not panic - long paths should be processed
@@ -819,7 +819,7 @@ fn policy_handles_paths_with_special_characters() {
         args: vec!["hello".to_string()],
         cwd: Some(special_path.to_string()),
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
 
     // Should not panic - special characters in paths are valid
@@ -851,7 +851,7 @@ fn policy_handles_empty_path_lists() {
         args: vec!["hello".to_string()],
         cwd: None,
         initial_size: TerminalSize::default(),
-        policy: ptybox::model::scenario::PolicyRef::Inline(policy.clone()),
+        policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy.clone())),
     };
 
     // Should not panic - empty lists are valid (deny-by-default)
