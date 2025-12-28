@@ -1,6 +1,6 @@
 # Data Model (Source of Truth)
 
-This document defines the canonical data model, types, and API contracts for `tui-use`. It is a living document and the source of truth for how the app behaves.
+This document defines the canonical data model, types, and API contracts for `ptybox`. It is a living document and the source of truth for how the app behaves.
 
 ## Change control (how to evolve this doc)
 - Any change to public types, CLI protocol, scenario format, default policy behavior, or error codes **must** update:
@@ -10,7 +10,7 @@ This document defines the canonical data model, types, and API contracts for `tu
 - Backwards-incompatible changes must bump a **protocol version** and be explicitly called out in `CHANGELOG.md`.
 
 ## Core concepts
-- **Run**: a top-level execution of `tui-use` (CLI invocation or library call).
+- **Run**: a top-level execution of `ptybox` (CLI invocation or library call).
 - **Session**: a live PTY-backed child process being driven.
 - **Scenario**: a declarative list of steps (actions + assertions) executed by the runner.
 - **Action**: what a human does (keypress, typed text, resize, wait, terminate).
@@ -279,7 +279,7 @@ Artifacts are the on-disk trace of a run.
   - `diff.json` (ReplayDiff; written into `replay-<run_id>/` when replay fails)
 
 ### RunResult (run.json)
-`RunResult` is the canonical summary produced by `tui-use` for automation and reporting.
+`RunResult` is the canonical summary produced by `ptybox` for automation and reporting.
 
 - `run_result_version: u32`
 - `protocol_version: u32`
@@ -318,7 +318,7 @@ Artifacts are the on-disk trace of a run.
 - `success: bool`
 - `exit_code: i32?` (when exited normally)
 - `signal: i32?` (when terminated by signal)
-- `terminated_by_harness: bool` (true when tui-use forcibly killed the process, e.g., due to timeout)
+- `terminated_by_harness: bool` (true when ptybox forcibly killed the process, e.g., due to timeout)
 
 ### NormalizationRecord (normalization.json)
 Normalization is only applied during replay comparisons. The applied filters must be recorded.
@@ -394,13 +394,13 @@ The tool is designed for programmatic use (scripts and LLM tools) without MCP.
 
 ### Rust library API (normative)
 Primary entrypoints:
-- `tui_use::run::run_scenario(scenario, options) -> RunnerResult<RunResult>`
-- `tui_use::run::run_scenario_with_options(scenario, options) -> RunnerResult<RunResult>`
-- `tui_use::run::run_exec(command, args, cwd, policy) -> RunnerResult<RunResult>`
-- `tui_use::run::run_exec_with_options(command, args, cwd, policy, options) -> RunnerResult<RunResult>`
+- `ptybox::run::run_scenario(scenario, options) -> RunnerResult<RunResult>`
+- `ptybox::run::run_scenario_with_options(scenario, options) -> RunnerResult<RunResult>`
+- `ptybox::run::run_exec(command, args, cwd, policy) -> RunnerResult<RunResult>`
+- `ptybox::run::run_exec_with_options(command, args, cwd, policy, options) -> RunnerResult<RunResult>`
 
 Session API:
-- `tui_use::session::Session::spawn(config: SessionConfig) -> Result<Session, RunnerError>`
+- `ptybox::session::Session::spawn(config: SessionConfig) -> Result<Session, RunnerError>`
 - `Session::send(action: &Action) -> Result<(), RunnerError>`
 - `Session::observe(timeout: Duration) -> Result<Observation, RunnerError>`
 - `Session::wait_for_exit(timeout: Duration) -> Result<Option<ExitStatus>, RunnerError>`
@@ -415,9 +415,9 @@ Configuration types:
 ### CLI API (normative)
 
 #### Execution commands
-- `tui-use exec --json -- <cmd> [args...]` — run a single command under policy
-- `tui-use run --scenario <path> --json` — run a scenario file
-- `tui-use driver --stdio --json -- <cmd> [args...]` — interactive NDJSON session
+- `ptybox exec --json -- <cmd> [args...]` — run a single command under policy
+- `ptybox run --scenario <path> --json` — run a scenario file
+- `ptybox driver --stdio --json -- <cmd> [args...]` — interactive NDJSON session
 
 Common flags:
 - `--policy <path>` — use policy file
@@ -430,8 +430,8 @@ Common flags:
 - `--tui` — run with interactive TUI showing live terminal (run command)
 
 #### Replay commands
-- `tui-use replay --artifacts <dir> --json` — compare artifacts against baseline
-- `tui-use replay-report --artifacts <dir> --json` — read latest replay summary
+- `ptybox replay --artifacts <dir> --json` — compare artifacts against baseline
+- `ptybox replay-report --artifacts <dir> --json` — read latest replay summary
 
 Replay flags:
 - `--strict` — disable normalization for exact comparison
@@ -444,9 +444,9 @@ Replay flags:
 - `--require-checksums` — fail if checksums.json is missing
 
 #### Utility commands
-- `tui-use protocol-help --json` — output protocol documentation for LLM consumption
-- `tui-use trace --artifacts <dir> -o <file>` — generate interactive HTML trace viewer
-- `tui-use completions <shell>` — generate shell completions (bash, zsh, fish)
+- `ptybox protocol-help --json` — output protocol documentation for LLM consumption
+- `ptybox trace --artifacts <dir> -o <file>` — generate interactive HTML trace viewer
+- `ptybox completions <shell>` — generate shell completions (bash, zsh, fish)
 
 Notes:
 - In `--json` mode, stdout contains only JSON/NDJSON. Diagnostics are emitted on stderr.

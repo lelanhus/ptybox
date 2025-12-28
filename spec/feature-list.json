@@ -3,7 +3,7 @@
     "category": "functional",
     "description": "Spawn a target TUI under a PTY using argv exec (no shell) and return a structured RunResult with exit status.",
     "steps": [
-      "Step 1: Run `tui-use exec --json -- <cmd> <args...>` against a small fixture program",
+      "Step 1: Run `ptybox exec --json -- <cmd> <args...>` against a small fixture program",
       "Step 2: Verify the command runs in a PTY and produces terminal output",
       "Step 3: Verify JSON output includes exit code, runtime, and final screen snapshot"
     ],
@@ -13,7 +13,7 @@
     "category": "functional",
     "description": "Send keystrokes to the PTY session and observe updated screen snapshots deterministically.",
     "steps": [
-      "Step 1: Start `tui-use driver --stdio --json -- <cmd>` with a fixture TUI",
+      "Step 1: Start `ptybox driver --stdio --json -- <cmd>` with a fixture TUI",
       "Step 2: Send a key action (e.g., Down/Enter) via NDJSON stdin",
       "Step 3: Verify an Observation message reflects the expected screen change"
     ],
@@ -54,7 +54,7 @@
     "description": "Scenario runner executes actions and assertions step-by-step with timeouts and retries.",
     "steps": [
       "Step 1: Create a scenario file with multiple steps and assertions",
-      "Step 2: Run `tui-use run --scenario <file> --json`",
+      "Step 2: Run `ptybox run --scenario <file> --json`",
       "Step 3: Verify the runner returns per-step results and overall pass/fail"
     ],
     "passes": true
@@ -120,7 +120,7 @@
     "category": "functional",
     "description": "CLI supports stable JSON output suitable for parsing in scripts (no human-only output required).",
     "steps": [
-      "Step 1: Run `tui-use run --json` and `tui-use exec --json`",
+      "Step 1: Run `ptybox run --json` and `ptybox exec --json`",
       "Step 2: Parse output with `jq` (or another JSON parser)",
       "Step 3: Verify schemas are consistent and include protocol/version fields"
     ],
@@ -140,7 +140,7 @@
     "category": "functional",
     "description": "Runs inside Linux containers with PTY support using an explicit sandbox policy (no macOS-only assumptions).",
     "steps": [
-      "Step 1: Run `tui-use exec --json --policy <policy.json> -- <cmd>` inside a Linux container with /dev/pts mounted",
+      "Step 1: Run `ptybox exec --json --policy <policy.json> -- <cmd>` inside a Linux container with /dev/pts mounted",
       "Step 2: Use a policy that explicitly sets `sandbox: none` and allowlists the target executable",
       "Step 3: Verify the run succeeds and returns a structured RunResult without host sandbox errors"
     ],
@@ -171,7 +171,7 @@
     "description": "Enabling network access requires explicit acknowledgement.",
     "steps": [
       "Step 1: Create a policy with `network: enabled` and `network_unsafe_ack: false` (or omitted)",
-      "Step 2: Run `tui-use exec --policy <file> --json -- <cmd>`",
+      "Step 2: Run `ptybox exec --policy <file> --json -- <cmd>`",
       "Step 3: Verify the run fails with E_POLICY_DENIED; then set `network_unsafe_ack: true` and verify the run proceeds"
     ],
     "passes": true
@@ -181,7 +181,7 @@
     "description": "Unsandboxed runs require explicit acknowledgement that network policy cannot be enforced.",
     "steps": [
       "Step 1: Create a policy with `sandbox: none`, `network: disabled`, and `network_unsafe_ack: false`",
-      "Step 2: Run `tui-use exec --policy <file> --json -- <cmd>`",
+      "Step 2: Run `ptybox exec --policy <file> --json -- <cmd>`",
       "Step 3: Verify the run fails with E_POLICY_DENIED; then set `network_unsafe_ack: true` and verify the run proceeds"
     ],
     "passes": true
@@ -201,7 +201,7 @@
     "description": "Filesystem allowlists and working_dir must use absolute paths.",
     "steps": [
       "Step 1: Create a policy with relative `fs.allowed_read` or `fs.allowed_write` or `fs.working_dir`",
-      "Step 2: Run `tui-use exec --policy <file> --json -- <cmd>`",
+      "Step 2: Run `ptybox exec --policy <file> --json -- <cmd>`",
       "Step 3: Verify the run fails with E_POLICY_DENIED and reports the offending path"
     ],
     "passes": true
@@ -211,7 +211,7 @@
     "description": "RunConfig cwd must be an absolute path.",
     "steps": [
       "Step 1: Create a scenario or run config with relative `cwd`",
-      "Step 2: Run `tui-use run` or `tui-use exec` with that config",
+      "Step 2: Run `ptybox run` or `ptybox exec` with that config",
       "Step 3: Verify the run fails with E_POLICY_DENIED and reports the cwd"
     ],
     "passes": true
@@ -220,9 +220,9 @@
     "category": "safety",
     "description": "CLI rejects relative cwd values early.",
     "steps": [
-      "Step 1: Run `tui-use exec --cwd relative --json --policy <file> -- <cmd>`",
+      "Step 1: Run `ptybox exec --cwd relative --json --policy <file> -- <cmd>`",
       "Step 2: Verify the CLI exits with E_CLI_INVALID_ARG before running",
-      "Step 3: Run `tui-use run --scenario <file>` where scenario cwd is relative and verify the CLI rejects it"
+      "Step 3: Run `ptybox run --scenario <file>` where scenario cwd is relative and verify the CLI rejects it"
     ],
     "passes": true
   },
@@ -230,7 +230,7 @@
     "category": "safety",
     "description": "CLI rejects conflicting replay normalization flags with E_CLI_INVALID_ARG.",
     "steps": [
-      "Step 1: Run `tui-use replay --normalize none --normalize snapshot_id --json --artifacts <dir>`",
+      "Step 1: Run `ptybox replay --normalize none --normalize snapshot_id --json --artifacts <dir>`",
       "Step 2: Verify the CLI exits with E_CLI_INVALID_ARG before running"
     ],
     "passes": true
@@ -240,7 +240,7 @@
     "description": "Exec allowlist paths must be absolute.",
     "steps": [
       "Step 1: Create a policy with a relative `exec.allowed_executables` entry",
-      "Step 2: Run `tui-use exec --policy <file> --json -- <cmd>`",
+      "Step 2: Run `ptybox exec --policy <file> --json -- <cmd>`",
       "Step 3: Verify the run fails with E_POLICY_DENIED and reports the path"
     ],
     "passes": true
@@ -250,7 +250,7 @@
     "description": "Write allowlists require explicit acknowledgement to prevent accidental write access.",
     "steps": [
       "Step 1: Create a policy with non-empty `fs.allowed_write` and omit `fs_write_unsafe_ack` (or set it false)",
-      "Step 2: Run `tui-use exec --policy <file> --json -- <cmd>`",
+      "Step 2: Run `ptybox exec --policy <file> --json -- <cmd>`",
       "Step 3: Verify the run fails with E_POLICY_DENIED; then set `fs_write_unsafe_ack: true` and verify the run proceeds"
     ],
     "passes": true
@@ -269,7 +269,7 @@
     "category": "safety",
     "description": "CLI can enable strict-write and ack unsafe writes explicitly.",
     "steps": [
-      "Step 1: Run `tui-use exec --strict-write --artifacts <dir> --policy <file> --json -- <cmd>` with `fs_write_unsafe_ack: false`",
+      "Step 1: Run `ptybox exec --strict-write --artifacts <dir> --policy <file> --json -- <cmd>` with `fs_write_unsafe_ack: false`",
       "Step 2: Verify the run fails with E_POLICY_DENIED due to write access",
       "Step 3: Re-run with `--ack-unsafe-write` and verify artifacts are written"
     ],
@@ -279,7 +279,7 @@
     "category": "safety",
     "description": "Driver mode supports strict-write and explicit write acknowledgements.",
     "steps": [
-      "Step 1: Run `tui-use driver --stdio --json --strict-write --ack-unsafe-write -- <cmd>`",
+      "Step 1: Run `ptybox driver --stdio --json --strict-write --ack-unsafe-write -- <cmd>`",
       "Step 2: Send a terminate action",
       "Step 3: Verify the driver responds with a valid observation"
     ],
@@ -330,7 +330,7 @@
     "description": "Artifacts directory must be within filesystem write allowlists; disallowed paths are rejected.",
     "steps": [
       "Step 1: Create a policy with a narrow `fs.allowed_write` list that excludes the artifacts dir",
-      "Step 2: Run `tui-use exec --artifacts <dir> --json -- <cmd>`",
+      "Step 2: Run `ptybox exec --artifacts <dir> --json -- <cmd>`",
       "Step 3: Verify the run fails fast with E_POLICY_DENIED and reports the artifacts path"
     ],
     "passes": true
@@ -340,7 +340,7 @@
     "description": "Artifacts can be enabled via policy and default to the policy directory when CLI does not supply --artifacts.",
     "steps": [
       "Step 1: Create a policy with `artifacts.enabled: true` and a valid `artifacts.dir` inside `fs.allowed_write`",
-      "Step 2: Run `tui-use exec --policy <file> --json -- <cmd>` without `--artifacts`",
+      "Step 2: Run `ptybox exec --policy <file> --json -- <cmd>` without `--artifacts`",
       "Step 3: Verify artifacts are written to the policy directory"
     ],
     "passes": true
@@ -389,7 +389,7 @@
     "category": "style",
     "description": "CLI help text documents safe defaults and how to explicitly opt into unsafe modes.",
     "steps": [
-      "Step 1: Run `tui-use --help` and `tui-use run --help`",
+      "Step 1: Run `ptybox --help` and `ptybox run --help`",
       "Step 2: Review the output",
       "Step 3: Verify defaults, sandbox behavior, and unsafe flags are clearly explained"
     ],
@@ -420,7 +420,7 @@
     "description": "Scenario files can be loaded from either JSON or YAML formats.",
     "steps": [
       "Step 1: Create equivalent scenario files in JSON and YAML",
-      "Step 2: Run each scenario with `tui-use run --scenario <file> --json`",
+      "Step 2: Run each scenario with `ptybox run --scenario <file> --json`",
       "Step 3: Verify both runs produce equivalent step results and final status"
     ],
     "passes": true
@@ -440,7 +440,7 @@
     "description": "CLI includes an `--explain-policy` style command/output to show why a run is allowed or denied.",
     "steps": [
       "Step 1: Configure a policy that will deny a run",
-      "Step 2: Run `tui-use exec --explain-policy --json` (or `tui-use run --explain-policy --json`)",
+      "Step 2: Run `ptybox exec --explain-policy --json` (or `ptybox run --explain-policy --json`)",
       "Step 3: Verify output explains the exact denial reason and the minimum change needed to allow it"
     ],
     "passes": true
@@ -449,7 +449,7 @@
     "category": "functional",
     "description": "NDJSON interactive driver mode includes protocol versioning and rejects incompatible versions explicitly.",
     "steps": [
-      "Step 1: Start `tui-use driver --stdio --json` and capture the first output message",
+      "Step 1: Start `ptybox driver --stdio --json` and capture the first output message",
       "Step 2: Send a message with a `protocol_version` field and verify the observation echoes the same protocol",
       "Step 3: Send a message with an incompatible protocol version and verify E_PROTOCOL_VERSION_MISMATCH"
     ],
@@ -479,7 +479,7 @@
     "category": "safety",
     "description": "Disabling the sandbox requires explicit acknowledgement to prevent accidental unsafe runs.",
     "steps": [
-      "Step 1: Create a policy with `sandbox: none` and `sandbox_unsafe_ack: false` (or omitted), then run `tui-use exec --policy <file> --json -- <cmd>`",
+      "Step 1: Create a policy with `sandbox: none` and `sandbox_unsafe_ack: false` (or omitted), then run `ptybox exec --policy <file> --json -- <cmd>`",
       "Step 2: Observe the tool behavior",
       "Step 3: Verify it fails with E_POLICY_DENIED and requires explicit acknowledgement; then set `sandbox_unsafe_ack: true` and verify the run proceeds"
     ],
@@ -490,7 +490,7 @@
     "description": "Broad filesystem allowlists for `/`, the current home directory, or system roots (e.g., `/System`, `/Library`, `/Users`, `/private`, `/Volumes`) are rejected to prevent catastrophic writes.",
     "steps": [
       "Step 1: Create a policy allowlisting `/` (or `$HOME`, `/System`, `/Users`, etc.) for read or write access",
-      "Step 2: Run `tui-use exec --policy <file> --json -- <cmd>`",
+      "Step 2: Run `ptybox exec --policy <file> --json -- <cmd>`",
       "Step 3: Verify the run fails fast with E_POLICY_DENIED and reports the disallowed path"
     ],
     "passes": true
@@ -529,7 +529,7 @@
     "category": "reliability",
     "description": "Malformed JSON/NDJSON inputs fail with a structured protocol error and do not crash the process.",
     "steps": [
-      "Step 1: Start `tui-use driver --stdio --json`",
+      "Step 1: Start `ptybox driver --stdio --json`",
       "Step 2: Send malformed JSON via stdin",
       "Step 3: Verify the process returns a structured protocol error (E_PROTOCOL) and exits non-zero"
     ],

@@ -1,5 +1,5 @@
 <project_specification>
-  <project_name>tui-use - Safe TUI Automation Harness for LLM Self-Testing</project_name>
+  <project_name>ptybox - Safe TUI Automation Harness for LLM Self-Testing</project_name>
 
   <overview>
     Build a macOS-first, security-focused harness that allows automated agents (including LLMs) to interact with
@@ -112,8 +112,8 @@
     </architecture>
 
     <workspace_layout>
-      - crates/tui_use (library)
-      - crates/tui-use-cli (CLI)
+      - crates/ptybox (library)
+      - crates/ptybox-cli (CLI)
       - spec/ (living specifications and acceptance test list)
       - CHANGELOG.md (public change history)
     </workspace_layout>

@@ -1,6 +1,6 @@
 # CI / Container Usage
 
-This document describes how to run `tui-use` in CI and inside Linux containers.
+This document describes how to run `ptybox` in CI and inside Linux containers.
 
 ## Goals
 - Keep sandboxing **explicit**: no silent downgrade.
@@ -62,7 +62,7 @@ Example CI command:
 ```
 mkdir -p /work/artifacts
 
-tui-use exec --json --policy /work/policy.json --artifacts /work/artifacts -- /bin/echo hello
+ptybox exec --json --policy /work/policy.json --artifacts /work/artifacts -- /bin/echo hello
 ```
 
 ## Container smoke test

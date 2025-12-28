@@ -1,6 +1,6 @@
-# Rust Style Guide for tui-use
+# Rust Style Guide for ptybox
 
-This document defines the coding standards enforced across the tui-use workspace.
+This document defines the coding standards enforced across the ptybox workspace.
 All rules are enforced via workspace-level lints in `Cargo.toml` and build-time
 flags in `.cargo/config.toml`.
 
@@ -307,7 +307,7 @@ use crate::runner::RunnerError;
 /// # Examples
 ///
 /// ```
-/// use tui_use::policy::validate_path;
+/// use ptybox::policy::validate_path;
 ///
 /// let result = validate_path("/usr/bin/ls", &policy);
 /// assert!(result.is_ok());
@@ -355,7 +355,7 @@ for testing public API behavior.
 
 ## CLI-Specific Rules
 
-The CLI crate (`tui-use-cli`) has specific allowances:
+The CLI crate (`ptybox-cli`) has specific allowances:
 
 ```rust
 #![allow(clippy::print_stdout)]  // CLI must print

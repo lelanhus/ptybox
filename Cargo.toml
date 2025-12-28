@@ -1,17 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/tui_use",
-  "crates/tui-use-cli",
-  "crates/tui-use-fixtures",
+  "crates/ptybox",
+  "crates/ptybox-cli",
+  "crates/ptybox-fixtures",
 ]
 
 [workspace.package]
 edition = "2021"
 rust-version = "1.74"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/lelanhus/tui-use"
-homepage = "https://github.com/lelanhus/tui-use"
+repository = "https://github.com/lelanhus/ptybox"
+homepage = "https://github.com/lelanhus/ptybox"
 keywords = ["tui", "terminal", "automation", "sandbox", "security"]
 categories = ["command-line-utilities", "development-tools::testing"]
 

@@ -7,7 +7,7 @@ This project aims to follow “Keep a Changelog” style entries and Semantic Ve
 ## [Unreleased]
 
 ### Added
-- Cargo workspace with library (`crates/tui_use`) and CLI (`crates/tui-use-cli`).
+- Cargo workspace with library (`crates/ptybox`) and CLI (`crates/ptybox-cli`).
 - Core data model types matching the spec (policy, scenario, actions, observations, run results).
 - PTY session runner with key/text/resize/terminate support and canonical terminal snapshots.
 - Scenario loader (JSON/YAML), runner loop, basic assertions, wait conditions, and budgets.
@@ -65,22 +65,22 @@ This project aims to follow “Keep a Changelog” style entries and Semantic Ve
 - Replay supports `--explain` for resolved normalization settings.
 - Replay supports regex-based normalization rules for transcript/snapshot lines (policy-only).
 - Replay report command added to read latest replay summary/diff.
-- Shell completions for bash, zsh, and fish (`tui-use completions <shell>`).
+- Shell completions for bash, zsh, and fish (`ptybox completions <shell>`).
 - Colored output with `--color={auto|always|never}` global flag and `NO_COLOR` support.
 - New assertion types: `line_equals`, `line_contains`, `line_matches`, `not_contains`, `screen_empty`, `cursor_visible`, `cursor_hidden`.
 - Verbose progress output with `--verbose` flag showing step-by-step progress to stderr.
 - Cell-level styling extraction from terminal snapshots via `snapshot_with_cells()` method.
-- Static HTML trace viewer (`tui-use trace --artifacts <dir>`) for debugging and visualizing runs.
-- Interactive TUI mode (`tui-use run --tui`) for live terminal output and step progress visualization.
+- Static HTML trace viewer (`ptybox trace --artifacts <dir>`) for debugging and visualizing runs.
+- Interactive TUI mode (`ptybox run --tui`) for live terminal output and step progress visualization.
 - JSON schemas for spec validation: `spec/schemas/scenario.schema.json`, `run-result.schema.json`, `observation.schema.json`.
-- Comprehensive rustdoc documentation for all public types in `tui_use::model`, `session`, and `runner` modules.
-- Test fixtures crate (`tui-use-fixtures`) with purpose-built TUI programs for testing:
-  - `tui-use-echo-keys`: echoes keypresses with byte values for input testing.
-  - `tui-use-show-size`: displays terminal dimensions, updates on resize.
-  - `tui-use-delay-output`: outputs text after delay for wait condition testing.
-  - `tui-use-exit-code`: exits with specified code for exit handling testing.
-  - `tui-use-alt-screen`: uses alternate screen buffer for screen mode testing.
-  - `tui-use-unicode-test`: prints Unicode/CJK/emoji for charset testing.
+- Comprehensive rustdoc documentation for all public types in `ptybox::model`, `session`, and `runner` modules.
+- Test fixtures crate (`ptybox-fixtures`) with purpose-built TUI programs for testing:
+  - `ptybox-echo-keys`: echoes keypresses with byte values for input testing.
+  - `ptybox-show-size`: displays terminal dimensions, updates on resize.
+  - `ptybox-delay-output`: outputs text after delay for wait condition testing.
+  - `ptybox-exit-code`: exits with specified code for exit handling testing.
+  - `ptybox-alt-screen`: uses alternate screen buffer for screen mode testing.
+  - `ptybox-unicode-test`: prints Unicode/CJK/emoji for charset testing.
 - Fixture-based integration tests (`cli_fixtures.rs`) covering Unicode handling, resize actions, exit codes, wait conditions, and driver protocol.
 - GitHub Actions release workflow (`.github/workflows/release.yml`) for automated binary releases on tag push.
 - Dual MIT/Apache-2.0 licensing with LICENSE-MIT and LICENSE-APACHE files.

@@ -1,13 +1,13 @@
-# tui-use
+# ptybox
 
 **Playwright for Terminal UIs** - A security-focused harness for driving TUI applications with a stable JSON protocol.
 
-[![CI](https://github.com/tui-use-rs/tui-use/actions/workflows/ci.yml/badge.svg)](https://github.com/tui-use-rs/tui-use/actions)
+[![CI](https://github.com/ptybox-rs/ptybox/actions/workflows/ci.yml/badge.svg)](https://github.com/ptybox-rs/ptybox/actions)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
-## What is tui-use?
+## What is ptybox?
 
-tui-use enables automated testing and interaction with terminal UI applications through a structured JSON/NDJSON protocol. It's designed for:
+ptybox enables automated testing and interaction with terminal UI applications through a structured JSON/NDJSON protocol. It's designed for:
 
 - **AI/LLM agents** that need to interact with CLI tools
 - **Integration testing** of TUI applications
@@ -30,23 +30,23 @@ tui-use enables automated testing and interaction with terminal UI applications 
 ### From source
 
 ```bash
-git clone https://github.com/tui-use-rs/tui-use
-cd tui-use
+git clone https://github.com/ptybox-rs/ptybox
+cd ptybox
 cargo build --release
-./target/release/tui-use --help
+./target/release/ptybox --help
 ```
 
 ### Shell completions
 
 ```bash
 # Bash
-tui-use completions bash > ~/.bash_completion.d/tui-use
+ptybox completions bash > ~/.bash_completion.d/ptybox
 
 # Zsh
-tui-use completions zsh > ~/.zfunc/_tui-use
+ptybox completions zsh > ~/.zfunc/_ptybox
 
 # Fish
-tui-use completions fish > ~/.config/fish/completions/tui-use.fish
+ptybox completions fish > ~/.config/fish/completions/ptybox.fish
 ```
 
 ## Quick Start
@@ -54,7 +54,7 @@ tui-use completions fish > ~/.config/fish/completions/tui-use.fish
 ### 1. Run a command with JSON output
 
 ```bash
-tui-use exec --json -- /bin/echo "Hello, TUI"
+ptybox exec --json -- /bin/echo "Hello, TUI"
 ```
 
 ### 2. Use a policy file for security
@@ -80,14 +80,14 @@ cat > policy.json << 'EOF'
 }
 EOF
 
-tui-use exec --json --policy policy.json -- /bin/echo "Secured!"
+ptybox exec --json --policy policy.json -- /bin/echo "Secured!"
 ```
 
 ### 3. Interactive driver mode
 
 ```bash
 # Start interactive session
-tui-use driver --stdio --json -- /bin/cat
+ptybox driver --stdio --json -- /bin/cat
 
 # Send actions via stdin (NDJSON)
 {"protocol_version":1,"action":{"type":"text","payload":{"text":"hello"}}}
@@ -131,12 +131,12 @@ steps:
 ```
 
 ```bash
-tui-use run --json --scenario scenario.yaml
+ptybox run --json --scenario scenario.yaml
 ```
 
 ## Comparison
 
-| Feature | tui-use | Pexpect | VHS | Expectrl |
+| Feature | ptybox | Pexpect | VHS | Expectrl |
 |---------|---------|---------|-----|----------|
 | JSON Protocol | Yes | No | No | No |
 | Security Sandbox | Yes | No | No | No |
@@ -166,12 +166,12 @@ tui-use run --json --scenario scenario.yaml
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        tui-use CLI                          │
+│                        ptybox CLI                          │
 │  exec │ run │ driver │ replay │ replay-report │ completions │
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
-│                      tui_use Library                         │
+│                      ptybox Library                         │
 ├──────────┬──────────┬──────────┬──────────┬─────────────────┤
 │ session  │ terminal │ policy   │ runner   │ artifacts       │
 │ (PTY)    │ (VT100)  │ (sandbox)│ (steps)  │ (snapshots)     │

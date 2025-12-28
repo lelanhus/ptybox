@@ -1,4 +1,4 @@
-# Agent Guidelines (tui-use)
+# Agent Guidelines (ptybox)
 
 These instructions apply to the entire repository.
 

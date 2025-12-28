@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`tui-use` is a security-focused harness for driving terminal UI (TUI) applications with a stable JSON/NDJSON protocol. It enables automated agents (including LLMs) to interact with TUI apps via keys/text/resize/wait and verify behavior via deterministic terminal screen snapshots and transcripts. Designed for macOS-first with Linux container support.
+`ptybox` is a security-focused harness for driving terminal UI (TUI) applications with a stable JSON/NDJSON protocol. It enables automated agents (including LLMs) to interact with TUI apps via keys/text/resize/wait and verify behavior via deterministic terminal screen snapshots and transcripts. Designed for macOS-first with Linux container support.
 
 ## Build & Test Commands
 
@@ -23,7 +23,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # CLI example: run a command under policy
-tui-use exec --json --policy spec/examples/policy.json --artifacts /tmp/artifacts -- /bin/echo hello
+ptybox exec --json --policy spec/examples/policy.json --artifacts /tmp/artifacts -- /bin/echo hello
 
 # Container smoke test
 scripts/container-smoke.sh
@@ -32,11 +32,11 @@ scripts/container-smoke.sh
 ## Architecture
 
 ### Workspace Structure
-- `crates/tui_use` — Core library: PTY session management, terminal emulation, policy enforcement, artifacts
-- `crates/tui-use-cli` — CLI binary (`tui-use`): exec, run, replay, driver commands
-- `crates/tui-use-fixtures` — Test fixtures and helpers
+- `crates/ptybox` — Core library: PTY session management, terminal emulation, policy enforcement, artifacts
+- `crates/ptybox-cli` — CLI binary (`ptybox`): exec, run, replay, driver commands
+- `crates/ptybox-fixtures` — Test fixtures and helpers
 
-### Library Modules (tui_use)
+### Library Modules (ptybox)
 - `session` — PTY lifecycle, spawn/read/write/resize/terminate
 - `terminal` — ANSI/VT parsing via vt100, produces canonical `ScreenSnapshot`
 - `policy` — Deny-by-default policy validation, sandbox profile generation (Seatbelt on macOS)
@@ -51,10 +51,10 @@ scripts/container-smoke.sh
 
 **Run module** (primary entry points):
 ```rust
-tui_use::run::run_scenario(scenario) -> RunnerResult<RunResult>
-tui_use::run::run_scenario_with_options(scenario, options) -> RunnerResult<RunResult>
-tui_use::run::run_exec(command, args, cwd, policy) -> RunnerResult<RunResult>
-tui_use::run::run_exec_with_options(command, args, cwd, policy, options) -> RunnerResult<RunResult>
+ptybox::run::run_scenario(scenario) -> RunnerResult<RunResult>
+ptybox::run::run_scenario_with_options(scenario, options) -> RunnerResult<RunResult>
+ptybox::run::run_exec(command, args, cwd, policy) -> RunnerResult<RunResult>
+ptybox::run::run_exec_with_options(command, args, cwd, policy, options) -> RunnerResult<RunResult>
 ```
 
 **Session API** (lower-level PTY control):

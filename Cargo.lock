@@ -791,6 +791,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "ptybox"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "nix 0.29.0",
+ "portable-pty",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "thiserror 2.0.17",
+ "tracing",
+ "uuid",
+ "vt100",
+]
+
+[[package]]
+name = "ptybox-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "crossterm",
+ "indicatif",
+ "miette",
+ "ptybox",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "supports-color",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ptybox-fixtures"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "ptybox",
+ "serde_json",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1312,53 +1359,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
-]
-
-[[package]]
-name = "tui-use-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "clap_complete",
- "crossterm",
- "indicatif",
- "miette",
- "ratatui",
- "serde",
- "serde_json",
- "serde_yml",
- "supports-color",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "tui_use",
-]
-
-[[package]]
-name = "tui-use-fixtures"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde_json",
- "tui_use",
-]
-
-[[package]]
-name = "tui_use"
-version = "0.1.0"
-dependencies = [
- "miette",
- "nix 0.29.0",
- "portable-pty",
- "regex",
- "serde",
- "serde_json",
- "serde_yml",
- "thiserror 2.0.17",
- "tracing",
- "uuid",
- "vt100",
 ]
 
 [[package]]

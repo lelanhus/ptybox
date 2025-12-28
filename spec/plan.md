@@ -1,6 +1,6 @@
 # Plan
 
-Build `tui-use`: a macOS-first, security-focused harness that lets automated agents (including LLMs) interact with TUI applications “like a human” (keys/text/resize/wait) and verify behavior via deterministic terminal screen snapshots + transcripts. It must also run inside Linux containers used for sandboxed LLMs or agent orchestrations. This repo is spec-first: `spec/data-model.md` is the source of truth for types and APIs, `spec/feature-list.json` defines completeness, and `CHANGELOG.md` records changes.
+Build `ptybox`: a macOS-first, security-focused harness that lets automated agents (including LLMs) interact with TUI applications “like a human” (keys/text/resize/wait) and verify behavior via deterministic terminal screen snapshots + transcripts. It must also run inside Linux containers used for sandboxed LLMs or agent orchestrations. This repo is spec-first: `spec/data-model.md` is the source of truth for types and APIs, `spec/feature-list.json` defines completeness, and `CHANGELOG.md` records changes.
 
 ## Guiding principles
 - **Secure by default**: deny-by-default policies, sandbox enabled by default, no implicit privilege expansion.
@@ -11,8 +11,8 @@ Build `tui-use`: a macOS-first, security-focused harness that lets automated age
 - **Least privilege**: policy validation rejects broad path allowlists (e.g., `/`, the current home directory, or system roots like `/System` and `/Users`).
 
 ## Deliverables (v1)
-- Rust crate: `tui_use` (programmatic API).
-- CLI: `tui-use` (script/LLM friendly).
+- Rust crate: `ptybox` (programmatic API).
+- CLI: `ptybox` (script/LLM friendly).
 - PTY-driven session runner:
   - spawn a command with argv (no shell by default)
   - send actions (keys/text/resize/wait/terminate)

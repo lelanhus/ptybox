@@ -1,6 +1,6 @@
-# Contributing to tui-use
+# Contributing to ptybox
 
-Thank you for your interest in contributing to tui-use! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to ptybox! This document provides guidelines and instructions for contributing.
 
 ## About This Project
 
@@ -21,8 +21,8 @@ This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDU
 
 ```bash
 # Clone the repository
-git clone https://github.com/tui-use-rs/tui-use
-cd tui-use
+git clone https://github.com/ptybox-rs/ptybox
+cd ptybox
 
 # Build all crates
 cargo build --workspace
@@ -43,7 +43,7 @@ All code must compile without warnings. CI enforces `-D warnings` for both rustc
 
 ### No `unwrap()` or `expect()` in Library Code
 
-Library code (`crates/tui_use/`) must propagate errors with context:
+Library code (`crates/ptybox/`) must propagate errors with context:
 
 ```rust
 // Bad
@@ -125,9 +125,9 @@ docs(readme): add installation instructions
 ## Project Structure
 
 ```
-tui-use/
+ptybox/
 ├── crates/
-│   ├── tui_use/           # Core library
+│   ├── ptybox/           # Core library
 │   │   ├── src/
 │   │   │   ├── session/   # PTY management
 │   │   │   ├── terminal/  # VT100 parsing
@@ -135,8 +135,8 @@ tui-use/
 │   │   │   ├── runner/    # Step execution
 │   │   │   └── model/     # Domain types
 │   │   └── tests/
-│   ├── tui-use-cli/       # CLI binary
-│   └── tui-use-fixtures/  # Test fixtures
+│   ├── ptybox-cli/       # CLI binary
+│   └── ptybox-fixtures/  # Test fixtures
 ├── spec/                   # Specifications
 │   ├── data-model.md      # Types and protocols
 │   ├── plan.md            # Architecture
@@ -163,17 +163,17 @@ cargo test --workspace -- --nocapture
 
 - Place unit tests in the same file as the code
 - Place integration tests in `tests/` directories
-- Use the fixture programs in `tui-use-fixtures` for CLI tests
+- Use the fixture programs in `ptybox-fixtures` for CLI tests
 
 ### Test Fixtures
 
-The `tui-use-fixtures` crate provides purpose-built TUI programs for testing:
+The `ptybox-fixtures` crate provides purpose-built TUI programs for testing:
 
-- `tui-use-echo-keys` - Echoes keypresses
-- `tui-use-show-size` - Displays terminal size
-- `tui-use-delay-output` - Outputs after delay
-- `tui-use-exit-code` - Exits with specified code
-- `tui-use-unicode-test` - Prints Unicode/emoji
+- `ptybox-echo-keys` - Echoes keypresses
+- `ptybox-show-size` - Displays terminal size
+- `ptybox-delay-output` - Outputs after delay
+- `ptybox-exit-code` - Exits with specified code
+- `ptybox-unicode-test` - Prints Unicode/emoji
 
 ## Security
 
@@ -185,13 +185,13 @@ Please report security vulnerabilities privately. See [SECURITY.md](SECURITY.md)
 
 Be especially careful when modifying:
 
-- `crates/tui_use/src/policy/` - Policy validation and sandbox
-- `crates/tui_use/src/session/` - Process spawning
+- `crates/ptybox/src/policy/` - Policy validation and sandbox
+- `crates/ptybox/src/session/` - Process spawning
 - Any code handling file paths or environment variables
 
 ## Questions?
 
-- Open a [GitHub issue](https://github.com/tui-use-rs/tui-use/issues) for bugs or features
+- Open a [GitHub issue](https://github.com/ptybox-rs/ptybox/issues) for bugs or features
 - Check existing issues before creating new ones
 
 ## License

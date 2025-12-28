@@ -1,0 +1,53 @@
+[package]
+name = "ptybox-fixtures"
+version = "0.1.0"
+description = "Test fixtures for ptybox TUI automation"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false  # Internal testing crate
+
+[lib]
+name = "ptybox_fixtures"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ptybox-echo-fixture"
+path = "src/bin/echo_tui.rs"
+
+[[bin]]
+name = "ptybox-time-fixture"
+path = "src/bin/time_tui.rs"
+
+[[bin]]
+name = "ptybox-echo-keys"
+path = "src/bin/echo_keys.rs"
+
+[[bin]]
+name = "ptybox-show-size"
+path = "src/bin/show_size.rs"
+
+[[bin]]
+name = "ptybox-delay-output"
+path = "src/bin/delay_output.rs"
+
+[[bin]]
+name = "ptybox-exit-code"
+path = "src/bin/exit_code.rs"
+
+[[bin]]
+name = "ptybox-alt-screen"
+path = "src/bin/alt_screen.rs"
+
+[[bin]]
+name = "ptybox-unicode-test"
+path = "src/bin/unicode_test.rs"
+
+[dependencies]
+libc = "0.2"
+ptybox = { version = "0.1.0", path = "../ptybox" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
