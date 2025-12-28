@@ -16,11 +16,11 @@
 //!
 //! Tests the replay comparison and normalization functionality.
 
-use std::fs;
-use std::path::{Path, PathBuf};
 use ptybox::model::{NormalizationFilter, NormalizationRuleTarget, Policy};
 use ptybox::replay::{explain_replay, ReplayOptions};
 use ptybox::runner::ErrorCode;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Write a test policy file with optional replay configuration.
 fn write_test_policy(dir: &Path, replay_config: Option<serde_json::Value>) {

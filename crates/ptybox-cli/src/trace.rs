@@ -6,9 +6,9 @@
 //! - Run metadata and assertion results
 
 use miette::{IntoDiagnostic, Result, WrapErr};
+use ptybox::model::{Color, RunResult, ScreenSnapshot};
 use std::fs;
 use std::path::Path;
-use ptybox::model::{Color, RunResult, ScreenSnapshot};
 
 /// Load artifacts and generate an HTML trace viewer.
 pub fn generate_trace(artifacts_dir: &Path, output_path: &Path) -> Result<()> {

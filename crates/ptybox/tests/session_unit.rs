@@ -16,10 +16,10 @@
 //!
 //! Tests the core PTY session management functionality.
 
-use std::time::Duration;
 use ptybox::model::{Action, ActionType, RunId, TerminalSize};
 use ptybox::runner::ErrorCode;
 use ptybox::session::{Session, SessionConfig};
+use std::time::Duration;
 
 fn default_config(command: &str) -> SessionConfig {
     SessionConfig {

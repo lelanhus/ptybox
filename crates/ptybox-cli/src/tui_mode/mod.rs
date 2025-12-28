@@ -14,6 +14,9 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use miette::{IntoDiagnostic, Result};
+use ptybox::artifacts::ArtifactsWriterConfig;
+use ptybox::model::{RunResult, Scenario, ScreenSnapshot, StepStatus};
+use ptybox::runner::{run_scenario, ProgressCallback, ProgressEvent, RunnerOptions};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -27,9 +30,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use ptybox::artifacts::ArtifactsWriterConfig;
-use ptybox::model::{RunResult, Scenario, ScreenSnapshot, StepStatus};
-use ptybox::runner::{run_scenario, ProgressCallback, ProgressEvent, RunnerOptions};
 
 /// Run a scenario in interactive TUI mode.
 pub fn run_tui(scenario: Scenario, artifacts: Option<ArtifactsWriterConfig>) -> Result<()> {

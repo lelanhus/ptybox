@@ -16,9 +16,9 @@
 //!
 //! Tests for the wait condition evaluation in the runner module.
 
-use std::time::{Duration, Instant};
 use ptybox::model::{Action, ActionType, RunId, TerminalSize};
 use ptybox::session::{Session, SessionConfig};
+use std::time::{Duration, Instant};
 
 fn default_config(command: &str, args: Vec<String>) -> SessionConfig {
     SessionConfig {

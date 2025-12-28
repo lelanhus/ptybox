@@ -3,11 +3,11 @@
 //! Generates structured documentation of the ptybox protocol,
 //! including schemas, examples, and error codes.
 
-use serde::Serialize;
-use std::collections::BTreeMap;
 use ptybox::model::{
     POLICY_VERSION, PROTOCOL_VERSION, RUN_RESULT_VERSION, SCENARIO_VERSION, SNAPSHOT_VERSION,
 };
+use serde::Serialize;
+use std::collections::BTreeMap;
 
 /// Complete protocol documentation for LLM consumption.
 #[derive(Debug, Serialize)]

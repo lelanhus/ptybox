@@ -15,6 +15,9 @@
 - [Assertions](guides/assertions.md)
 - [Replay & Normalization](guides/replay.md)
 - [Sandbox Security](guides/sandbox.md)
+- [Container Setup](guides/containers.md)
+- [AI Agent Integration](guides/ai-agents.md)
+- [Troubleshooting](guides/troubleshooting.md)
 
 # Reference
 

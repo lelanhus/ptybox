@@ -40,6 +40,20 @@ jobs:
       - name: build
         run: cargo build --workspace
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: check docs
+        run: |
+          cargo doc --workspace --no-deps 2>&1 | tee doc-output.txt
+          if grep -q "^warning:" doc-output.txt; then
+            echo "Documentation warnings found:"
+            grep "^warning:" doc-output.txt
+            exit 1
+          fi
+
   container-smoke:
     runs-on: ubuntu-latest
     needs: test

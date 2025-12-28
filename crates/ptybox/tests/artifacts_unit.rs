@@ -16,14 +16,14 @@
 //!
 //! Tests the artifact writing and checksum functionality.
 
-use std::fs;
-use std::path::PathBuf;
 use ptybox::artifacts::{ArtifactsWriter, ArtifactsWriterConfig};
 use ptybox::model::{
     Cursor, NormalizationRecord, NormalizationSource, Policy, RunId, ScreenSnapshot, SnapshotId,
     NORMALIZATION_VERSION, SNAPSHOT_VERSION,
 };
 use ptybox::runner::ErrorCode;
+use std::fs;
+use std::path::PathBuf;
 
 fn temp_artifacts_dir() -> PathBuf {
     // Include thread ID for test isolation when running tests in parallel

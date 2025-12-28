@@ -342,3 +342,226 @@ fn trace_help_shows_options() {
         "should show --output option"
     );
 }
+
+#[test]
+fn trace_handles_malformed_run_json() {
+    let artifacts_dir = tempdir().expect("create temp dir");
+
+    // Write invalid JSON
+    fs::write(artifacts_dir.path().join("run.json"), "{ invalid json }").expect("write run.json");
+
+    let output = ptybox_bin()
+        .arg("trace")
+        .arg("--artifacts")
+        .arg(artifacts_dir.path())
+        .arg("-o")
+        .arg(artifacts_dir.path().join("trace.html"))
+        .output()
+        .expect("failed to execute");
+
+    assert!(!output.status.success(), "should fail on malformed JSON");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("parse") || stderr.contains("invalid") || stderr.contains("JSON"),
+        "should report parse error: {stderr}"
+    );
+}
+
+#[test]
+fn trace_handles_missing_snapshots_dir() {
+    let artifacts_dir = tempdir().expect("create temp dir");
+
+    // Create run.json but no snapshots directory
+    let run_json = r#"{
+        "run_result_version": 1,
+        "protocol_version": 1,
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "status": "passed",
+        "started_at_ms": 1000,
+        "ended_at_ms": 2000,
+        "command": "echo",
+        "args": [],
+        "cwd": "/tmp",
+        "policy": {
+            "policy_version": 3,
+            "sandbox": "seatbelt",
+            "network": "disabled",
+            "fs": {"allowed_read": [], "allowed_write": []},
+            "exec": {"allowed_executables": [], "allow_shell": false},
+            "env": {"allowlist": [], "set": {}, "inherit": false},
+            "budgets": {
+                "max_runtime_ms": 60000,
+                "max_steps": 10000,
+                "max_output_bytes": 8388608,
+                "max_snapshot_bytes": 2097152,
+                "max_wait_ms": 10000
+            },
+            "artifacts": {"enabled": false, "overwrite": false}
+        },
+        "steps": []
+    }"#;
+    fs::write(artifacts_dir.path().join("run.json"), run_json).expect("write run.json");
+
+    let output_file = artifacts_dir.path().join("trace.html");
+
+    let output = ptybox_bin()
+        .arg("trace")
+        .arg("--artifacts")
+        .arg(artifacts_dir.path())
+        .arg("-o")
+        .arg(&output_file)
+        .output()
+        .expect("failed to execute");
+
+    // Should succeed even without snapshots directory
+    assert!(
+        output.status.success(),
+        "trace should succeed without snapshots: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let html = fs::read_to_string(&output_file).expect("read html");
+    assert!(
+        html.contains("<!DOCTYPE html>"),
+        "should still produce valid HTML"
+    );
+}
+
+#[test]
+fn trace_handles_unicode_in_snapshots() {
+    let artifacts_dir = tempdir().expect("create temp dir");
+
+    let run_json = r#"{
+        "run_result_version": 1,
+        "protocol_version": 1,
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "status": "passed",
+        "started_at_ms": 1000,
+        "ended_at_ms": 2000,
+        "command": "echo",
+        "args": [],
+        "cwd": "/tmp",
+        "policy": {
+            "policy_version": 3,
+            "sandbox": "seatbelt",
+            "network": "disabled",
+            "fs": {"allowed_read": [], "allowed_write": []},
+            "exec": {"allowed_executables": [], "allow_shell": false},
+            "env": {"allowlist": [], "set": {}, "inherit": false},
+            "budgets": {
+                "max_runtime_ms": 60000,
+                "max_steps": 10000,
+                "max_output_bytes": 8388608,
+                "max_snapshot_bytes": 2097152,
+                "max_wait_ms": 10000
+            },
+            "artifacts": {"enabled": false, "overwrite": false}
+        },
+        "steps": []
+    }"#;
+    fs::write(artifacts_dir.path().join("run.json"), run_json).expect("write run.json");
+
+    // Create snapshot with Unicode including emoji and CJK
+    let snapshots_dir = artifacts_dir.path().join("snapshots");
+    fs::create_dir_all(&snapshots_dir).expect("create snapshots dir");
+
+    let snapshot_json = r#"{
+        "snapshot_version": 1,
+        "snapshot_id": "00000000-0000-0000-0000-000000000003",
+        "rows": 24,
+        "cols": 80,
+        "cursor": {"row": 0, "col": 0, "visible": true},
+        "alternate_screen": false,
+        "lines": ["Hello 世界! 🎉", "日本語テスト", "├── folder"],
+        "cells": null
+    }"#;
+    fs::write(snapshots_dir.join("000001.json"), snapshot_json).expect("write snapshot");
+
+    let output_file = artifacts_dir.path().join("trace.html");
+
+    let output = ptybox_bin()
+        .arg("trace")
+        .arg("--artifacts")
+        .arg(artifacts_dir.path())
+        .arg("-o")
+        .arg(&output_file)
+        .output()
+        .expect("failed to execute");
+
+    assert!(
+        output.status.success(),
+        "trace should handle unicode: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let html = fs::read_to_string(&output_file).expect("read html");
+    // The unicode content should be preserved in the embedded JSON
+    assert!(
+        html.contains("世界") || html.contains("\\u4e16\\u754c"),
+        "should contain CJK characters"
+    );
+}
+
+#[test]
+fn trace_handles_empty_steps_array() {
+    let artifacts_dir = tempdir().expect("create temp dir");
+
+    let run_json = r#"{
+        "run_result_version": 1,
+        "protocol_version": 1,
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "status": "passed",
+        "started_at_ms": 1000,
+        "ended_at_ms": 2000,
+        "command": "echo",
+        "args": [],
+        "cwd": "/tmp",
+        "policy": {
+            "policy_version": 3,
+            "sandbox": "seatbelt",
+            "network": "disabled",
+            "fs": {"allowed_read": [], "allowed_write": []},
+            "exec": {"allowed_executables": [], "allow_shell": false},
+            "env": {"allowlist": [], "set": {}, "inherit": false},
+            "budgets": {
+                "max_runtime_ms": 60000,
+                "max_steps": 10000,
+                "max_output_bytes": 8388608,
+                "max_snapshot_bytes": 2097152,
+                "max_wait_ms": 10000
+            },
+            "artifacts": {"enabled": false, "overwrite": false}
+        },
+        "steps": []
+    }"#;
+    fs::write(artifacts_dir.path().join("run.json"), run_json).expect("write run.json");
+
+    let output_file = artifacts_dir.path().join("trace.html");
+
+    let output = ptybox_bin()
+        .arg("trace")
+        .arg("--artifacts")
+        .arg(artifacts_dir.path())
+        .arg("-o")
+        .arg(&output_file)
+        .output()
+        .expect("failed to execute");
+
+    assert!(
+        output.status.success(),
+        "trace should handle empty steps: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let html = fs::read_to_string(&output_file).expect("read html");
+    assert!(
+        html.contains("<!DOCTYPE html>"),
+        "should produce valid HTML"
+    );
+    // The RUN_RESULT should have empty steps array
+    assert!(
+        html.contains("\"steps\":[]") || html.contains("\"steps\": []"),
+        "should contain empty steps array"
+    );
+}

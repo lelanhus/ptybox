@@ -5,7 +5,8 @@
 //! deterministic terminal screen snapshots and transcripts.
 
 #![forbid(unsafe_code)]
-// TODO: Remove this allowance once documentation is complete
+// Library documentation is in progress. Public API types have docs;
+// internal types will be documented in future releases.
 #![allow(missing_docs)]
 
 pub mod artifacts;

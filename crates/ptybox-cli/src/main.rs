@@ -2,8 +2,8 @@
 //!
 //! Command-line interface for running scenarios and commands under policy control.
 
-// CLI-specific lint allowances
-#![allow(missing_docs)] // TODO: Add docs
+// CLI-specific lint allowances (CLI binary, not library)
+#![allow(missing_docs)]
 #![allow(clippy::print_stdout)] // CLI must print to stdout
 #![allow(clippy::print_stderr)] // CLI must print to stderr
 #![allow(clippy::exit)] // CLI uses exit codes
@@ -13,9 +13,6 @@
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 use miette::{IntoDiagnostic, Result};
-use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
-use std::sync::Arc;
 use ptybox::artifacts::ArtifactsWriterConfig;
 use ptybox::model::policy::Policy;
 use ptybox::policy::explain_policy_for_run_config;
@@ -23,6 +20,9 @@ use ptybox::runner::{
     load_scenario, run_exec_with_options, run_scenario, RunnerError, RunnerOptions,
 };
 use ptybox::scenario::load_policy_file;
+use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Color output mode
 #[derive(Copy, Clone, Debug, Default, ValueEnum)]
@@ -445,8 +445,7 @@ fn cmd_run(
     }
 
     let progress_callback = if verbose {
-        Some(Arc::new(progress::VerboseProgress::new())
-            as Arc<dyn ptybox::runner::ProgressCallback>)
+        Some(Arc::new(progress::VerboseProgress::new()) as Arc<dyn ptybox::runner::ProgressCallback>)
     } else {
         None
     };

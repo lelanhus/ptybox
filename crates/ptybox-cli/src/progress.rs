@@ -1,10 +1,10 @@
 //! Verbose progress output using indicatif.
 
 use indicatif::{ProgressBar, ProgressStyle};
-use std::io::Write;
-use std::sync::Mutex;
 use ptybox::model::StepStatus;
 use ptybox::runner::{ProgressCallback, ProgressEvent};
+use std::io::Write;
+use std::sync::Mutex;
 
 /// Progress callback that outputs step-by-step progress to stderr.
 pub struct VerboseProgress {

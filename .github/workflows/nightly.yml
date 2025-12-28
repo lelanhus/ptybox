@@ -1,0 +1,64 @@
+name: Nightly
+
+on:
+  schedule:
+    # Run at 4 AM UTC daily
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+jobs:
+  full-test:
+    name: Full Test Suite
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: test
+        run: cargo test --workspace --all-features
+      - name: doc test
+        run: cargo test --doc --workspace
+
+  msrv-test:
+    name: MSRV Test (1.74)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.74
+      - name: build
+        run: cargo build --workspace
+      - name: test
+        run: cargo test --workspace
+
+  container-extended:
+    name: Extended Container Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Container smoke test (rust image)
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            --workdir /workspace \
+            rust:1.83 \
+            /bin/bash -c '
+              cargo build --release -p ptybox-cli &&
+              ./target/release/ptybox exec --json --no-sandbox --ack-unsafe-sandbox -- /bin/echo "hello from container"
+            '
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
