@@ -3,7 +3,6 @@ title = "ptybox"
 description = "Security-focused harness for driving TUI applications"
 authors = ["lelanhus"]
 language = "en"
-multilingual = false
 src = "src"
 
 [build]
