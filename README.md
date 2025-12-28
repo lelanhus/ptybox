@@ -2,7 +2,7 @@
 
 **Playwright for Terminal UIs** - A security-focused harness for driving TUI applications with a stable JSON protocol.
 
-[![CI](https://github.com/ptybox-rs/ptybox/actions/workflows/ci.yml/badge.svg)](https://github.com/ptybox-rs/ptybox/actions)
+[![CI](https://github.com/lelanhus/ptybox/actions/workflows/ci.yml/badge.svg)](https://github.com/lelanhus/ptybox/actions)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
 ## What is ptybox?
@@ -30,7 +30,7 @@ ptybox enables automated testing and interaction with terminal UI applications t
 ### From source
 
 ```bash
-git clone https://github.com/ptybox-rs/ptybox
+git clone https://github.com/lelanhus/ptybox
 cd ptybox
 cargo build --release
 ./target/release/ptybox --help

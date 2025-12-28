@@ -21,7 +21,7 @@ This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDU
 
 ```bash
 # Clone the repository
-git clone https://github.com/ptybox-rs/ptybox
+git clone https://github.com/lelanhus/ptybox
 cd ptybox
 
 # Build all crates
@@ -191,7 +191,7 @@ Be especially careful when modifying:
 
 ## Questions?
 
-- Open a [GitHub issue](https://github.com/ptybox-rs/ptybox/issues) for bugs or features
+- Open a [GitHub issue](https://github.com/lelanhus/ptybox/issues) for bugs or features
 - Check existing issues before creating new ones
 
 ## License

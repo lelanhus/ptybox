@@ -1,0 +1,17 @@
+[book]
+title = "ptybox"
+description = "Security-focused harness for driving TUI applications"
+authors = ["lelanhus"]
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/lelanhus/ptybox"
+edit-url-template = "https://github.com/lelanhus/ptybox/edit/main/docs/{path}"
+site-url = "/ptybox/"
+default-theme = "light"
+preferred-dark-theme = "navy"
