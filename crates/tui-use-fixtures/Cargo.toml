@@ -46,7 +46,7 @@ path = "src/bin/unicode_test.rs"
 
 [dependencies]
 libc = "0.2"
-tui_use = { path = "../tui_use" }
+tui_use = { version = "0.1.0", path = "../tui_use" }
 serde_json = { workspace = true }
 
 [lints]

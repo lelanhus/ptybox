@@ -15,7 +15,7 @@ name = "tui-use"
 path = "src/main.rs"
 
 [dependencies]
-tui_use = { path = "../tui_use" }
+tui_use = { version = "0.1.0", path = "../tui_use" }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 miette = { workspace = true }

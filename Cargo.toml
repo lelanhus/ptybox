@@ -10,8 +10,8 @@ members = [
 edition = "2021"
 rust-version = "1.74"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/YOUR_USERNAME/tui-use"
-homepage = "https://github.com/YOUR_USERNAME/tui-use"
+repository = "https://github.com/lelanhus/tui-use"
+homepage = "https://github.com/lelanhus/tui-use"
 keywords = ["tui", "terminal", "automation", "sandbox", "security"]
 categories = ["command-line-utilities", "development-tools::testing"]
 
