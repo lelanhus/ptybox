@@ -12,9 +12,9 @@ IMAGE="rust:1.83"
 # Paths inside the container (repo mounted at /work)
 docker run --rm \
   -v "${REPO_ROOT}":/work \
-  -w /work \
+  --workdir /work \
   "${IMAGE}" \
-  bash -lc '
+  /bin/bash -c '
     set -euo pipefail
     cargo build -p ptybox-cli
     ./target/debug/ptybox exec --json --policy /work/spec/examples/policy-container.json --artifacts /work/artifacts-container -- /bin/echo hello
