@@ -58,7 +58,7 @@ pub fn run_tui(scenario: Scenario, artifacts: Option<ArtifactsWriterConfig>) -> 
         };
         let result = run_scenario(scenario_clone, options);
         // Ignore send error if receiver dropped
-        let _ = finish_tx.send(TuiEvent::RunFinished(result));
+        let _ = finish_tx.send(TuiEvent::RunFinished(Box::new(result)));
     });
 
     // Main UI loop
@@ -90,7 +90,7 @@ enum TuiEvent {
     Progress(ProgressEvent),
     #[allow(dead_code)] // Reserved for future snapshot streaming
     Snapshot(ScreenSnapshot),
-    RunFinished(std::result::Result<RunResult, ptybox::runner::RunnerError>),
+    RunFinished(Box<std::result::Result<RunResult, ptybox::runner::RunnerError>>),
 }
 
 /// Progress callback that sends events to the TUI.
@@ -184,7 +184,7 @@ impl App {
             }
             TuiEvent::RunFinished(result) => {
                 self.running = false;
-                match result {
+                match *result {
                     Ok(run_result) => {
                         self.run_result = Some(run_result);
                     }
