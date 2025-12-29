@@ -16,6 +16,6 @@ docker run --rm \
   "${IMAGE}" \
   bash -lc "
     set -euo pipefail
-    cargo build -p tui-use-cli
-    ./target/debug/tui-use exec --json --policy ${POLICY_PATH} --artifacts ${ARTIFACTS_DIR} -- /bin/echo hello
+    cargo build -p ptybox-cli
+    ./target/debug/ptybox exec --json --policy ${POLICY_PATH} --artifacts ${ARTIFACTS_DIR} -- /bin/echo hello
   "

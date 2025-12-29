@@ -61,5 +61,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: container smoke
         env:
-          TUI_USE_CONTAINER_SMOKE: "1"
+          PTYBOX_CONTAINER_SMOKE: "1"
         run: scripts/container-smoke.sh
