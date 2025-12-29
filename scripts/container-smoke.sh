@@ -17,5 +17,5 @@ docker run --rm \
   /bin/bash -c '
     set -euo pipefail
     cargo build -p ptybox-cli
-    ./target/debug/ptybox exec --json --policy /work/spec/examples/policy-container.json --artifacts /work/artifacts-container -- /bin/echo hello
+    ./target/debug/ptybox exec --json --policy /work/spec/examples/policy-container.json --artifacts /work/artifacts-container --overwrite -- /bin/echo hello
   '
