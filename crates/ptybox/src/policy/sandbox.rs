@@ -54,10 +54,8 @@ pub fn ensure_sandbox_available() -> RunnerResult<()> {
             "sandbox-exec failed to run",
             None,
         )),
-        Err(err) => Err(RunnerError::io(
-            "E_SANDBOX_UNAVAILABLE",
-            "sandbox-exec not available",
-            err,
+        Err(_) => Err(RunnerError::sandbox_unavailable(
+            "sandbox-exec not available (Seatbelt requires macOS)",
         )),
     }
 }
