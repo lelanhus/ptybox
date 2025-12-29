@@ -1,5 +1,5 @@
 {
-  "policy_version": 3,
+  "policy_version": 4,
   "sandbox": "none",
   "sandbox_unsafe_ack": true,
   "network": "disabled",
