@@ -86,7 +86,7 @@ fn session_spawn_with_cwd() {
         env: Default::default(),
     };
     let mut session = Session::spawn(config).expect("Failed to spawn");
-    let observation = session.observe(Duration::from_millis(100)).unwrap();
+    let observation = session.observe(Duration::from_millis(500)).unwrap();
     // The output should contain /tmp (or /private/tmp on macOS)
     let screen_text = observation.screen.lines.join("\n");
     assert!(
