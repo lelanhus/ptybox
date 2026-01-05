@@ -53,7 +53,7 @@ jobs:
             rust:1.83 \
             /bin/bash -c '
               cargo build --release -p ptybox-cli &&
-              ./target/release/ptybox exec --json --no-sandbox --ack-unsafe-sandbox --enable-network --ack-unsafe-network -- /bin/echo "hello from container"
+              ./target/release/ptybox exec --json --policy /workspace/spec/examples/policy-container.json -- /bin/echo "hello from container"
             '
 
   security-audit:
@@ -62,6 +62,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: rustsec/audit-check@v2
