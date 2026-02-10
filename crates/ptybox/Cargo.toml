@@ -2,6 +2,8 @@
 name = "ptybox"
 version = "0.1.0"
 description = "Security-focused harness for driving terminal UI applications with deterministic snapshots"
+readme = "../../README.md"
+documentation = "https://docs.rs/ptybox"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

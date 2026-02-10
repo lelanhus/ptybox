@@ -2,6 +2,8 @@
 name = "ptybox-cli"
 version = "0.1.0"
 description = "CLI for ptybox: security-focused TUI automation and testing"
+readme = "../../README.md"
+documentation = "https://docs.rs/ptybox-cli"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,6 +15,7 @@ categories.workspace = true
 [[bin]]
 name = "ptybox"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 ptybox = { version = "0.1.0", path = "../ptybox" }

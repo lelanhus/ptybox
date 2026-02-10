@@ -7,6 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_TARGETS: "x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu"
 
 jobs:
   build:
@@ -73,11 +74,14 @@ jobs:
         with:
           path: artifacts
 
+      - name: Verify downloaded tarballs
+        run: scripts/release-verify.sh verify-artifacts artifacts
+
       - name: Generate checksums
-        run: |
-          cd artifacts
-          find . -name "*.tar.gz" -exec sh -c 'sha256sum "$1" >> checksums.sha256' _ {} \;
-          cat checksums.sha256
+        run: scripts/release-verify.sh generate-checksums artifacts artifacts/checksums.sha256
+
+      - name: Verify checksums
+        run: scripts/release-verify.sh verify-checksums artifacts artifacts/checksums.sha256
 
       - name: Create Release
         uses: softprops/action-gh-release@v1

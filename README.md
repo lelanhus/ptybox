@@ -27,7 +27,40 @@ ptybox enables automated testing and interaction with terminal UI applications t
 
 ## Installation
 
-### From source
+### From GitHub releases (recommended)
+
+Supported release targets:
+- `x86_64-apple-darwin`
+- `aarch64-apple-darwin`
+- `x86_64-unknown-linux-gnu`
+- `aarch64-unknown-linux-gnu`
+
+```bash
+VERSION="v0.1.1"
+TARGET="x86_64-unknown-linux-gnu" # choose from the targets above
+BASE_URL="https://github.com/lelanhus/ptybox/releases/download/${VERSION}"
+
+curl -L -o "ptybox-${TARGET}.tar.gz" "${BASE_URL}/ptybox-${TARGET}.tar.gz"
+curl -L -o checksums.sha256 "${BASE_URL}/checksums.sha256"
+
+if command -v sha256sum >/dev/null 2>&1; then
+  grep "ptybox-${TARGET}.tar.gz" checksums.sha256 | sha256sum -c -
+else
+  grep "ptybox-${TARGET}.tar.gz" checksums.sha256 | shasum -a 256 -c -
+fi
+
+tar -xzf "ptybox-${TARGET}.tar.gz"
+./ptybox --version
+```
+
+### From crates.io (after publish)
+
+```bash
+cargo install ptybox-cli
+ptybox --version
+```
+
+### From source (fallback)
 
 ```bash
 git clone https://github.com/lelanhus/ptybox

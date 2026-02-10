@@ -19,8 +19,12 @@ This project aims to follow “Keep a Changelog” style entries and Semantic Ve
 - Policy fields `network_unsafe_ack` and `fs_write_unsafe_ack` for explicit acknowledgements.
 - CLI `--explain-policy` for exec/run to report allow/deny without running.
 - Policy-driven artifacts configuration: `artifacts.enabled` and `artifacts.dir` can enable artifacts without CLI flags.
+- Release verification helper script (`scripts/release-verify.sh`) to validate expected tarballs, binary contents, and checksum integrity.
 
 ### Changed
+- Release workflow now enforces artifact guardrails (expected tarballs, non-empty checksums, and checksum verification) before publishing.
+- Install docs now prioritize GitHub release binaries with checksum verification, then crates.io install, then source build fallback.
+- Crate metadata now includes `readme` and `documentation` fields for publish quality in `ptybox` and `ptybox-cli`.
 - Observation messages now include `protocol_version`.
 - Sandbox availability check uses inline profile (`sandbox-exec -p`) to verify capability.
 - Docs now define Linux container compatibility requirements and make policy language OS-agnostic.
