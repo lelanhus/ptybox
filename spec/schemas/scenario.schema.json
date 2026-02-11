@@ -31,7 +31,15 @@
         "policy": {
           "oneOf": [
             { "$ref": "policy.schema.json" },
-            { "type": "string", "description": "Path to policy file" }
+            {
+              "type": "object",
+              "description": "Path to policy file",
+              "required": ["path"],
+              "properties": {
+                "path": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
           ]
         }
       }

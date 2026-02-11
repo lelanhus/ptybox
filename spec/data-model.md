@@ -51,7 +51,7 @@ The following is the canonical shape for types. Rust names are normative; JSON k
 ### Versions
 Version fields exist to avoid surprises and make automated consumers robust.
 
-- `protocol_version: u32`: version of CLI JSON output and NDJSON interactive messages.
+- `protocol_version: u32` (current: `2`): version of CLI JSON output and NDJSON interactive messages.
 - `scenario_version: u32`: version of the scenario schema.
 - `policy_version: u32`: version of the policy schema.
 - `snapshot_version: u32`: version of the screen snapshot schema.
@@ -153,7 +153,7 @@ Policy can be specified inline or by file reference. The untagged enum supports 
 **Inline policy (embedded object):**
 ```json
 {
-  "policy_version": 3,
+  "policy_version": 4,
   "sandbox": "seatbelt",
   "network": "disabled",
   ...
@@ -275,6 +275,7 @@ Artifacts are the on-disk trace of a run.
   - `checksums.json` (map of artifact relative paths to 64-bit checksums)
   - `policy.json` (effective policy)
   - `scenario.json` (resolved scenario)
+  - `driver-actions.jsonl` (driver mode only; deterministic action log with request_id/sequence/timeout)
   - `replay.json` (ReplaySummary; written into `replay-<run_id>/` during replay)
   - `diff.json` (ReplayDiff; written into `replay-<run_id>/` when replay fails)
 
@@ -417,7 +418,7 @@ Configuration types:
 #### Execution commands
 - `ptybox exec --json -- <cmd> [args...]` — run a single command under policy
 - `ptybox run --scenario <path> --json` — run a scenario file
-- `ptybox driver --stdio --json -- <cmd> [args...]` — interactive NDJSON session
+- `ptybox driver --stdio --json [--policy <path>] -- <cmd> [args...]` — interactive NDJSON session
 
 Common flags:
 - `--policy <path>` — use policy file
@@ -452,22 +453,24 @@ Notes:
 - In `--json` mode, stdout contains only JSON/NDJSON. Diagnostics are emitted on stderr.
 - A `RunResult` with `status: Failed` still emits JSON on stdout but exits non-zero, using the stable exit codes.
 
-#### DriverInput (NDJSON)
-Interactive driver mode reads NDJSON `DriverInput` messages from stdin and writes NDJSON `Observation`/`RunResult` to stdout.
+#### DriverRequestV2 / DriverResponseV2 (NDJSON)
+Interactive driver mode reads NDJSON `DriverRequestV2` messages from stdin and writes NDJSON `DriverResponseV2` messages to stdout.
 
-**Driver mode defaults:**
-When no explicit `--policy` is provided, driver mode uses security-first defaults:
-- `sandbox: seatbelt` (enabled by default)
-- `network: disabled` (disabled by default)
-- `fs.allowed_read: []` (no reads beyond system baseline)
-- `fs.allowed_write: []` (no writes)
-- `exec.allowed_executables: [<command>]` (only the specified command)
+Driver mode enforces full policy validation before spawn, including executable allowlist and cwd checks (`EffectivePolicy::validate_run_config`). Use `--policy <path>` for non-trivial runs.
 
-These defaults enforce deny-by-default security. Override with `--policy <path>` or explicit flags like `--no-sandbox --ack-unsafe-sandbox`.
-
-Message format:
-- `protocol_version: u32`
+`DriverRequestV2`:
+- `protocol_version: u32` (must equal current protocol version)
+- `request_id: String` (echoed in response)
 - `action: Action`
+- `timeout_ms: u64?` (optional per-action timeout override)
+
+`DriverResponseV2`:
+- `protocol_version: u32`
+- `request_id: String`
+- `status: "ok" | "error"`
+- `observation: Observation?` (present on success)
+- `error: ErrorInfo?` (present on failure)
+- `action_metrics: { sequence: u64, duration_ms: u64 }?`
 
 ## Error model (fail fast and loud)
 Errors must be typed, structured, and stable for automation.

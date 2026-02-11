@@ -22,7 +22,7 @@ use ptybox::model::policy::{
     EnvPolicy, ExecPolicy, FsPolicy, NetworkEnforcementAck, NetworkPolicy, Policy, ReplayPolicy,
     SandboxMode, POLICY_VERSION,
 };
-use ptybox::model::{Observation, RunResult, TerminalSize};
+use ptybox::model::{DriverResponseStatus, DriverResponseV2, Observation, RunResult, TerminalSize};
 use ptybox::policy::PolicyExplanation;
 
 fn temp_dir(prefix: &str) -> PathBuf {
@@ -84,6 +84,14 @@ fn base_policy(work_dir: &Path, allowed_exec: Vec<String>) -> Policy {
         artifacts: Default::default(),
         replay: ReplayPolicy::default(),
     }
+}
+
+fn write_driver_policy(work_dir: &Path, command: &str, strict_write: bool) -> PathBuf {
+    let policy_path = work_dir.join("driver-policy.json");
+    let mut policy = base_policy(work_dir, vec![command.to_string()]);
+    policy.fs.strict_write = strict_write;
+    write_policy(&policy_path, &policy);
+    policy_path
 }
 
 #[test]
@@ -378,8 +386,18 @@ fn explain_policy_outputs_json() {
 
 #[test]
 fn driver_protocol_version_mismatch_is_reported() {
+    let dir = temp_dir("driver-version-mismatch");
+    let policy_path = write_driver_policy(&dir, "/bin/cat", false);
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", "/bin/cat"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/cat",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -387,12 +405,14 @@ fn driver_protocol_version_mismatch_is_reported() {
 
     {
         let stdin = child.stdin.as_mut().unwrap();
-        let payload = r#"{"protocol_version":999,"action":{"type":"terminate","payload":{}}}"#;
+        let payload = r#"{"protocol_version":999,"request_id":"req-1","action":{"type":"terminate","payload":{}}}"#;
         writeln!(stdin, "{payload}").unwrap();
     }
 
     let output = child.wait_with_output().unwrap();
-    let err: ptybox::model::ErrorInfo = serde_json::from_slice(&output.stdout).unwrap();
+    let response: DriverResponseV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response.status, DriverResponseStatus::Error);
+    let err = response.error.expect("error should be present");
     assert_eq!(err.code, "E_PROTOCOL_VERSION_MISMATCH");
     let context = err
         .context
@@ -409,8 +429,18 @@ fn driver_protocol_version_mismatch_is_reported() {
 
 #[test]
 fn driver_protocol_version_ok_returns_observation() {
+    let dir = temp_dir("driver-version-ok");
+    let policy_path = write_driver_policy(&dir, "/bin/cat", false);
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", "/bin/cat"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/cat",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -420,6 +450,7 @@ fn driver_protocol_version_ok_returns_observation() {
         let stdin = child.stdin.as_mut().unwrap();
         let payload = serde_json::json!({
             "protocol_version": ptybox::model::PROTOCOL_VERSION,
+            "request_id": "req-ok",
             "action": {
                 "type": "terminate",
                 "payload": {}
@@ -429,7 +460,9 @@ fn driver_protocol_version_ok_returns_observation() {
     }
 
     let output = child.wait_with_output().unwrap();
-    let observation: Observation = serde_json::from_slice(&output.stdout).unwrap();
+    let response: DriverResponseV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response.status, DriverResponseStatus::Ok);
+    let observation: Observation = response.observation.expect("observation should be present");
     assert_eq!(
         observation.protocol_version,
         ptybox::model::PROTOCOL_VERSION
@@ -705,8 +738,18 @@ fn strict_write_cli_with_ack_allows_artifacts() {
 
 #[test]
 fn driver_rejects_malformed_json() {
+    let dir = temp_dir("driver-malformed");
+    let policy_path = write_driver_policy(&dir, "/bin/cat", false);
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", "/bin/cat"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/cat",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -718,17 +761,22 @@ fn driver_rejects_malformed_json() {
     }
 
     let output = child.wait_with_output().unwrap();
-    let err: ptybox::model::ErrorInfo = serde_json::from_slice(&output.stdout).unwrap();
+    let response: DriverResponseV2 = serde_json::from_slice(&output.stdout).unwrap();
+    let err = response.error.expect("error should be present");
     assert_eq!(err.code, "E_PROTOCOL");
 }
 
 #[test]
 fn driver_strict_write_with_ack_allows_start() {
+    let dir = temp_dir("driver-strict-write");
+    let policy_path = write_driver_policy(&dir, "/bin/cat", true);
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
         .args([
             "driver",
             "--stdio",
             "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
             "--strict-write",
             "--ack-unsafe-write",
             "--",
@@ -743,6 +791,7 @@ fn driver_strict_write_with_ack_allows_start() {
         let stdin = child.stdin.as_mut().unwrap();
         let payload = serde_json::json!({
             "protocol_version": ptybox::model::PROTOCOL_VERSION,
+            "request_id": "req-strict",
             "action": {
                 "type": "terminate",
                 "payload": {}
@@ -752,7 +801,9 @@ fn driver_strict_write_with_ack_allows_start() {
     }
 
     let output = child.wait_with_output().unwrap();
-    let observation: Observation = serde_json::from_slice(&output.stdout).unwrap();
+    let response: DriverResponseV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response.status, DriverResponseStatus::Ok);
+    let observation: Observation = response.observation.expect("observation should be present");
     assert_eq!(
         observation.protocol_version,
         ptybox::model::PROTOCOL_VERSION

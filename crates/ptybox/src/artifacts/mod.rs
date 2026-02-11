@@ -117,6 +117,39 @@ impl ArtifactsWriter {
         Ok(())
     }
 
+    /// Write a single JSON line to a named artifact file.
+    ///
+    /// The file is created if it does not exist and appended to when it does.
+    pub fn write_json_line<T: Serialize>(&mut self, name: &str, value: &T) -> RunnerResult<()> {
+        let path = self.dir.join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| RunnerError::io("E_IO", "failed to create artifacts dir", err))?;
+        }
+
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|err| RunnerError::io("E_IO", "failed to open jsonl artifact", err))?;
+        let data = serde_json::to_vec(value)
+            .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to serialize jsonl line", err))?;
+        file.write_all(&data)
+            .map_err(|err| RunnerError::io("E_IO", "failed to write jsonl artifact", err))?;
+        file.write_all(b"\n")
+            .map_err(|err| RunnerError::io("E_IO", "failed to write jsonl newline", err))?;
+        file.flush()
+            .map_err(|err| RunnerError::io("E_IO", "failed to flush jsonl artifact", err))?;
+        self.record_checksum(name)?;
+        Ok(())
+    }
+
+    /// Artifacts root directory for this writer.
+    #[must_use]
+    pub fn dir(&self) -> &PathBuf {
+        &self.dir
+    }
+
     fn write_json<T: Serialize>(&mut self, name: &str, value: &T) -> RunnerResult<()> {
         let path = self.dir.join(name);
         if let Some(parent) = path.parent() {

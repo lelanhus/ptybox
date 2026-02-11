@@ -11,6 +11,7 @@
 
 pub mod artifacts;
 pub mod assertions;
+pub mod driver;
 pub mod model;
 pub mod policy;
 pub mod replay;

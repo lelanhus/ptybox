@@ -121,9 +121,11 @@ fn generate_commands() -> BTreeMap<String, CommandHelp> {
             description:
                 "Interactive NDJSON driver for step-by-step TUI control. Best for LLM agents."
                     .to_string(),
-            usage: "ptybox driver --stdio --json -- <command> [args...]".to_string(),
+            usage:
+                "ptybox driver --stdio --json --policy <path> [--artifacts <dir>] -- <command> [args...]"
+                    .to_string(),
             required_flags: Some(vec!["--stdio".to_string(), "--json".to_string()]),
-            output: "NDJSON stream of Observation messages on stdout".to_string(),
+            output: "NDJSON stream of DriverResponseV2 messages on stdout".to_string(),
         },
     );
 
@@ -167,18 +169,54 @@ fn generate_commands() -> BTreeMap<String, CommandHelp> {
 fn generate_schemas() -> BTreeMap<String, SchemaHelp> {
     let mut schemas = BTreeMap::new();
 
-    // DriverInput schema
+    // DriverRequestV2 schema
     let mut driver_input_fields = BTreeMap::new();
     driver_input_fields.insert(
         "protocol_version".to_string(),
-        "u32 (must be 1)".to_string(),
+        format!("u32 (must be {PROTOCOL_VERSION})"),
+    );
+    driver_input_fields.insert(
+        "request_id".to_string(),
+        "string: client-defined request id echoed in response".to_string(),
     );
     driver_input_fields.insert("action".to_string(), "Action object".to_string());
+    driver_input_fields.insert(
+        "timeout_ms".to_string(),
+        "u64 | null: optional per-action timeout override".to_string(),
+    );
     schemas.insert(
-        "DriverInput".to_string(),
+        "DriverRequestV2".to_string(),
         SchemaHelp {
             description: "Input message sent to driver via stdin (NDJSON).".to_string(),
             fields: Some(driver_input_fields),
+            types: None,
+        },
+    );
+
+    let mut driver_response_fields = BTreeMap::new();
+    driver_response_fields.insert("protocol_version".to_string(), "u32".to_string());
+    driver_response_fields.insert(
+        "request_id".to_string(),
+        "string: copied from DriverRequestV2.request_id".to_string(),
+    );
+    driver_response_fields.insert("status".to_string(), "ok | error".to_string());
+    driver_response_fields.insert(
+        "observation".to_string(),
+        "Observation | null: present when status=ok".to_string(),
+    );
+    driver_response_fields.insert(
+        "error".to_string(),
+        "ErrorInfo | null: present when status=error".to_string(),
+    );
+    driver_response_fields.insert(
+        "action_metrics".to_string(),
+        "object | null: {sequence, duration_ms}".to_string(),
+    );
+    schemas.insert(
+        "DriverResponseV2".to_string(),
+        SchemaHelp {
+            description: "Output message emitted by driver for each request.".to_string(),
+            fields: Some(driver_response_fields),
             types: None,
         },
     );
@@ -187,7 +225,11 @@ fn generate_schemas() -> BTreeMap<String, SchemaHelp> {
     let mut action_types = BTreeMap::new();
 
     let mut key_payload = BTreeMap::new();
-    key_payload.insert("key".to_string(), "string: Enter, Up, Down, Left, Right, Tab, Escape, Backspace, Delete, Home, End, PageUp, PageDown, or single character".to_string());
+    key_payload.insert(
+        "key".to_string(),
+        "string: Enter, F1-F12, arrows/navigation keys, Ctrl+<char>, or single character"
+            .to_string(),
+    );
     action_types.insert(
         "key".to_string(),
         TypeVariant {
@@ -490,15 +532,18 @@ fn generate_examples() -> BTreeMap<String, Example> {
         "driver_text".to_string(),
         Example {
             description: "Send text to a process using driver mode.".to_string(),
-            command: "ptybox driver --stdio --json -- /bin/cat".to_string(),
+            command: "ptybox driver --stdio --json --policy /tmp/policy.json -- /bin/cat"
+                .to_string(),
             input: Some(serde_json::json!({
-                "protocol_version": 1,
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": "req-1",
                 "action": {
                     "type": "text",
                     "payload": {"text": "hello\n"}
                 }
             })),
-            expected: "Observation with screen.lines containing 'hello'".to_string(),
+            expected: "DriverResponseV2 with status=ok and observation containing 'hello'"
+                .to_string(),
         },
     );
 
@@ -506,15 +551,17 @@ fn generate_examples() -> BTreeMap<String, Example> {
         "driver_key".to_string(),
         Example {
             description: "Send a key press to a process.".to_string(),
-            command: "ptybox driver --stdio --json -- /bin/bash".to_string(),
+            command: "ptybox driver --stdio --json --policy /tmp/policy.json -- /bin/bash"
+                .to_string(),
             input: Some(serde_json::json!({
-                "protocol_version": 1,
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": "req-2",
                 "action": {
                     "type": "key",
                     "payload": {"key": "Enter"}
                 }
             })),
-            expected: "Observation showing shell prompt on new line".to_string(),
+            expected: "DriverResponseV2 with status=ok and observation on new line".to_string(),
         },
     );
 
@@ -522,9 +569,11 @@ fn generate_examples() -> BTreeMap<String, Example> {
         "driver_wait".to_string(),
         Example {
             description: "Wait for text to appear on screen.".to_string(),
-            command: "ptybox driver --stdio --json -- /bin/bash".to_string(),
+            command: "ptybox driver --stdio --json --policy /tmp/policy.json -- /bin/bash"
+                .to_string(),
             input: Some(serde_json::json!({
-                "protocol_version": 1,
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": "req-3",
                 "action": {
                     "type": "wait",
                     "payload": {
@@ -535,7 +584,7 @@ fn generate_examples() -> BTreeMap<String, Example> {
                     }
                 }
             })),
-            expected: "Observation once screen contains '$'".to_string(),
+            expected: "DriverResponseV2 with status=ok once screen contains '$'".to_string(),
         },
     );
 
@@ -557,18 +606,17 @@ fn generate_quickstart() -> Quickstart {
         recommended_mode: "driver".to_string(),
         reason: "Interactive control with immediate feedback after each action.".to_string(),
         steps: vec![
-            "1. Copy binary to /tmp (paths under /Users are blocked by policy)".to_string(),
-            "2. Start driver: ptybox driver --stdio --json -- /tmp/your-app".to_string(),
-            "3. Send NDJSON actions to stdin, receive Observations on stdout".to_string(),
+            "1. Create a policy that allowlists the executable and working directory".to_string(),
+            "2. Start driver: ptybox driver --stdio --json --policy /tmp/policy.json -- /tmp/your-app".to_string(),
+            "3. Send DriverRequestV2 NDJSON to stdin, receive DriverResponseV2 on stdout".to_string(),
             "4. Use 'wait' action with screen_contains to wait for UI updates".to_string(),
             "5. Send 'terminate' action when done".to_string(),
         ],
         minimal_policy: serde_json::json!({
-            "policy_version": 3,
-            "sandbox": "none",
-            "sandbox_unsafe_ack": true,
+            "policy_version": 4,
+            "sandbox": "seatbelt",
             "network": "disabled",
-            "network_unsafe_ack": true,
+            "network_unsafe_ack": false,
             "fs": {
                 "allowed_read": ["/tmp"],
                 "allowed_write": ["/tmp"],

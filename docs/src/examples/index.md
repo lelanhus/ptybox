@@ -45,10 +45,12 @@ steps:
   - id: wait-prompt
     name: Wait for prompt
     action:
-      type: wait_for_text
+      type: wait
       payload:
-        text: "$ "
-        timeout_ms: 5000
+        condition:
+          type: screen_contains
+          payload:
+            text: "$ "
     assert:
       - { type: screen_contains, payload: { text: "$ " } }
 ```
@@ -68,7 +70,12 @@ steps:
 
   - id: verify-size
     name: Verify size reported
-    action: { type: wait, payload: { duration_ms: 100 } }
+    action:
+      type: wait
+      payload:
+        condition:
+          type: screen_contains
+          payload: { text: "40" }
     assert:
       - { type: screen_contains, payload: { text: "40" } }
 ```

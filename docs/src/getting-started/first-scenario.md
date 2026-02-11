@@ -1,16 +1,14 @@
 # Your First Scenario
 
-Scenarios define complete test cases with steps, actions, and assertions.
+Scenarios define reproducible TUI interactions with assertions.
 
-## Create a Scenario File
-
-Create `scenario.yaml`:
+## Create `scenario.yaml`
 
 ```yaml
 scenario_version: 1
 metadata:
   name: echo-test
-  description: Test that cat echoes input
+  description: Verify cat echoes typed text
 
 run:
   command: /bin/cat
@@ -23,9 +21,33 @@ run:
     sandbox_unsafe_ack: true
     network: disabled
     network_unsafe_ack: true
+    fs:
+      allowed_read: [/tmp]
+      allowed_write: [/tmp/ptybox-artifacts]
+      working_dir: /tmp
+    fs_write_unsafe_ack: true
+    fs_strict_write: false
     exec:
       allowed_executables: [/bin/cat]
       allow_shell: false
+    env:
+      allowlist: []
+      set: {}
+      inherit: false
+    budgets:
+      max_runtime_ms: 30000
+      max_steps: 100
+      max_output_bytes: 8388608
+      max_snapshot_bytes: 2097152
+      max_wait_ms: 10000
+    artifacts:
+      enabled: false
+      dir: null
+      overwrite: false
+    replay:
+      strict: false
+      normalization_filters: null
+      normalization_rules: null
 
 steps:
   - id: type-hello
@@ -40,7 +62,7 @@ steps:
     retries: 0
 
   - id: terminate
-    name: Terminate
+    name: Terminate process
     action:
       type: terminate
       payload: {}
@@ -48,48 +70,47 @@ steps:
     retries: 0
 ```
 
-## Run the Scenario
+## Run the scenario
 
 ```bash
 ptybox run --json --scenario scenario.yaml
 ```
 
-## With Artifacts
-
-Save snapshots and transcripts for debugging:
+## Capture artifacts
 
 ```bash
-ptybox run --json --scenario scenario.yaml --artifacts ./artifacts
+ptybox run --json --scenario scenario.yaml --artifacts /tmp/ptybox-artifacts --overwrite
 ```
 
-This creates:
-- `artifacts/run.json` - Run result
-- `artifacts/transcript.log` - Full terminal output
-- `artifacts/events.jsonl` - Observation stream
-- `artifacts/snapshots/` - Screen snapshots
+Artifacts include:
 
-## Understanding the Output
+- `run.json`
+- `events.jsonl`
+- `transcript.log`
+- `snapshots/`
+- `policy.json`
+- `scenario.json`
+- `checksums.json`
 
-The JSON output includes:
+## Example result shape
 
 ```json
 {
-  "protocol_version": 1,
+  "run_result_version": 1,
+  "protocol_version": 2,
   "run_id": "...",
-  "passed": true,
+  "status": "passed",
   "steps": [
     {
-      "step_id": "type-hello",
-      "passed": true,
-      "duration_ms": 42
+      "name": "Type hello",
+      "status": "passed"
     }
   ],
-  "exit_status": 0
+  "error": null
 }
 ```
 
-## Next Steps
+## Next
 
-- [Scenarios Guide](../guides/scenarios.md) - Advanced scenario features
-- [Assertions](../guides/assertions.md) - All assertion types
-- [Replay](../guides/replay.md) - Record and replay
+- [Scenarios Guide](../guides/scenarios.md)
+- [Replay Guide](../guides/replay.md)

@@ -13,9 +13,29 @@
     "category": "functional",
     "description": "Send keystrokes to the PTY session and observe updated screen snapshots deterministically.",
     "steps": [
-      "Step 1: Start `ptybox driver --stdio --json -- <cmd>` with a fixture TUI",
+      "Step 1: Start `ptybox driver --stdio --json --policy <file> -- <cmd>` with a fixture TUI",
       "Step 2: Send a key action (e.g., Down/Enter) via NDJSON stdin",
       "Step 3: Verify an Observation message reflects the expected screen change"
+    ],
+    "passes": true
+  },
+  {
+    "category": "functional",
+    "description": "Driver protocol v2 responses include deterministic action metrics (`sequence`, `duration_ms`) and preserve request ordering.",
+    "steps": [
+      "Step 1: Start `ptybox driver --stdio --json --policy <file> -- <cmd>`",
+      "Step 2: Send three valid actions with request IDs `req-1`, `req-2`, `req-3`",
+      "Step 3: Verify responses echo matching request IDs and `action_metrics.sequence` increments monotonically (1, 2, 3)"
+    ],
+    "passes": true
+  },
+  {
+    "category": "functional",
+    "description": "Driver artifacts are replay-compatible and include deterministic action logs.",
+    "steps": [
+      "Step 1: Run `ptybox driver --stdio --json --policy <file> --artifacts <dir> -- <cmd>` and send at least two actions plus terminate",
+      "Step 2: Verify artifacts include `driver-actions.jsonl`, `scenario.json`, `run.json`, `events.jsonl`, `transcript.log`, and `snapshots/`",
+      "Step 3: Run `ptybox replay --json --artifacts <dir>` and verify replay succeeds"
     ],
     "passes": true
   },
@@ -279,7 +299,7 @@
     "category": "safety",
     "description": "Driver mode supports strict-write and explicit write acknowledgements.",
     "steps": [
-      "Step 1: Run `ptybox driver --stdio --json --strict-write --ack-unsafe-write -- <cmd>`",
+      "Step 1: Run `ptybox driver --stdio --json --policy <file> --strict-write --ack-unsafe-write -- <cmd>`",
       "Step 2: Send a terminate action",
       "Step 3: Verify the driver responds with a valid observation"
     ],
@@ -447,11 +467,11 @@
   },
   {
     "category": "functional",
-    "description": "NDJSON interactive driver mode includes protocol versioning and rejects incompatible versions explicitly.",
+    "description": "NDJSON interactive driver mode uses DriverRequestV2/DriverResponseV2 envelopes and rejects incompatible protocol versions explicitly.",
     "steps": [
-      "Step 1: Start `ptybox driver --stdio --json` and capture the first output message",
-      "Step 2: Send a message with a `protocol_version` field and verify the observation echoes the same protocol",
-      "Step 3: Send a message with an incompatible protocol version and verify E_PROTOCOL_VERSION_MISMATCH"
+      "Step 1: Start `ptybox driver --stdio --json --policy <file> -- <cmd>`",
+      "Step 2: Send a `DriverRequestV2` message with `request_id` and verify the `DriverResponseV2` echoes request_id and returns `status: ok`",
+      "Step 3: Send a message with an incompatible `protocol_version` and verify `status: error` with `E_PROTOCOL_VERSION_MISMATCH`"
     ],
     "passes": true
   },
@@ -529,7 +549,7 @@
     "category": "reliability",
     "description": "Malformed JSON/NDJSON inputs fail with a structured protocol error and do not crash the process.",
     "steps": [
-      "Step 1: Start `ptybox driver --stdio --json`",
+      "Step 1: Start `ptybox driver --stdio --json --policy <file> -- <cmd>`",
       "Step 2: Send malformed JSON via stdin",
       "Step 3: Verify the process returns a structured protocol error (E_PROTOCOL) and exits non-zero"
     ],

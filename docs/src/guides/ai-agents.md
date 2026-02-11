@@ -1,383 +1,128 @@
 # AI Agent Integration
 
-This guide covers integrating ptybox with AI agents (LLMs) for automated TUI testing and interaction.
+This guide covers using `ptybox driver` as an agent loop for TUIs.
 
-## Overview
+## Why `driver`
 
-ptybox provides a stable NDJSON protocol that AI agents can use to:
+`driver` gives agents a deterministic request/response protocol over NDJSON:
 
-- Drive terminal applications step by step
-- Read screen content and state
-- Wait for specific conditions
-- Make decisions based on output
+- explicit `request_id` correlation
+- structured `status` / `error` for each action
+- stable `observation` snapshots
+- per-action metrics (`sequence`, `duration_ms`)
+- optional artifact capture for replay/debug
 
-## Driver Mode
+## Recommended startup
 
-The `driver` command provides interactive control via NDJSON over stdin/stdout:
+Use an explicit policy and artifacts directory.
 
 ```bash
-ptybox driver --stdio --json -- ./your-tui-app
+ptybox driver --stdio --json \
+  --policy ./policy.json \
+  --artifacts ./artifacts \
+  --overwrite \
+  -- ./your-tui-app
 ```
 
-The agent sends actions as JSON lines:
+## Request/response contract (v2)
+
+Request (`DriverRequestV2`):
 
 ```json
-{"protocol_version": 1, "action": {"type": "text", "payload": {"text": "hello"}}}
+{"protocol_version":2,"request_id":"req-1","action":{"type":"text","payload":{"text":"help"}},"timeout_ms":500}
 ```
 
-And receives observations:
+Response (`DriverResponseV2`):
 
 ```json
-{
-  "protocol_version": 1,
-  "run_id": "abc123",
-  "timestamp_ms": 150,
-  "screen": {
-    "rows": 24,
-    "cols": 80,
-    "cursor_row": 5,
-    "cursor_col": 12,
-    "lines": ["Welcome to the app", "Enter your name: _", ...]
-  },
-  "transcript_delta": "Enter your name: "
-}
+{"protocol_version":2,"request_id":"req-1","status":"ok","observation":{...},"error":null,"action_metrics":{"sequence":1,"duration_ms":7}}
 ```
 
-## Action Types
-
-### Text Input
-
-Send text to the application:
+On failure:
 
 ```json
-{
-  "protocol_version": 1,
-  "action": {
-    "type": "text",
-    "payload": {"text": "user@example.com"}
-  }
-}
+{"protocol_version":2,"request_id":"req-2","status":"error","observation":null,"error":{"code":"E_TIMEOUT","message":"wait condition timed out","context":{"condition":"screen_contains"}},"action_metrics":{"sequence":2,"duration_ms":500}}
 ```
 
-### Key Press
+## Action set
 
-Send special keys:
+- `text`: type/paste text (`payload.text`)
+- `key`: send key (`payload.key`)
+- `resize`: set PTY size (`payload.rows`, `payload.cols`)
+- `wait`: wait on condition (`screen_contains`, `screen_matches`, `cursor_at`, `process_exited`)
+- `terminate`: end session
 
-```json
-{
-  "protocol_version": 1,
-  "action": {
-    "type": "key",
-    "payload": {"key": "Enter"}
-  }
-}
-```
-
-Available keys: `Enter`, `Tab`, `Escape`, `Up`, `Down`, `Left`, `Right`, `Backspace`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `F1`-`F12`.
-
-### Resize Terminal
-
-Change terminal dimensions:
-
-```json
-{
-  "protocol_version": 1,
-  "action": {
-    "type": "resize",
-    "payload": {"rows": 30, "cols": 100}
-  }
-}
-```
-
-### Wait for Condition
-
-Wait for text to appear on screen:
-
-```json
-{
-  "protocol_version": 1,
-  "action": {
-    "type": "wait",
-    "payload": {
-      "condition": {
-        "type": "screen_contains",
-        "payload": {"text": "Success!"}
-      },
-      "timeout_ms": 5000
-    }
-  }
-}
-```
-
-Wait condition types:
-- `screen_contains` - Text appears anywhere on screen
-- `screen_matches_regex` - Regex matches screen content
-- `cursor_at` - Cursor at specific row/column
-- `delay` - Wait fixed milliseconds
-- `process_exited` - Process has terminated
-
-### Terminate
-
-End the session:
-
-```json
-{
-  "protocol_version": 1,
-  "action": {
-    "type": "terminate",
-    "payload": {}
-  }
-}
-```
-
-## Integration Patterns
-
-### Python Subprocess Example
+## Minimal Python loop
 
 ```python
-import subprocess
 import json
+import subprocess
 
-def run_tui_session(commands):
-    proc = subprocess.Popen(
-        ["ptybox", "driver", "--stdio", "--json", "--", "./app"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True
-    )
-
-    results = []
-    for action in commands:
-        request = {"protocol_version": 1, "action": action}
-        proc.stdin.write(json.dumps(request) + "\n")
-        proc.stdin.flush()
-
-        response = proc.stdout.readline()
-        observation = json.loads(response)
-        results.append(observation)
-
-        if action["type"] == "terminate":
-            break
-
-    proc.wait()
-    return results
-```
-
-### LLM Tool Definition (OpenAI Format)
-
-```json
-{
-  "name": "tui_action",
-  "description": "Send an action to the terminal application",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "action_type": {
-        "type": "string",
-        "enum": ["text", "key", "wait", "terminate"],
-        "description": "Type of action to perform"
-      },
-      "text": {
-        "type": "string",
-        "description": "Text to type (for 'text' action)"
-      },
-      "key": {
-        "type": "string",
-        "description": "Key to press (for 'key' action)"
-      },
-      "wait_for": {
-        "type": "string",
-        "description": "Text to wait for (for 'wait' action)"
-      }
-    },
-    "required": ["action_type"]
-  }
-}
-```
-
-### Claude Tool Definition (MCP Format)
-
-```json
-{
-  "name": "ptybox_action",
-  "description": "Interact with a terminal application",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "type": {
-        "type": "string",
-        "enum": ["text", "key", "resize", "wait", "terminate"]
-      },
-      "payload": {
-        "type": "object"
-      }
-    },
-    "required": ["type", "payload"]
-  }
-}
-```
-
-## Reading Screen State
-
-The observation includes the full screen state:
-
-```python
-def analyze_screen(observation):
-    screen = observation["screen"]
-    lines = screen["lines"]
-    cursor = (screen["cursor_row"], screen["cursor_col"])
-
-    # Find specific content
-    for i, line in enumerate(lines):
-        if "Error" in line:
-            return {"status": "error", "line": i, "content": line}
-
-    # Check cursor position
-    if cursor == (5, 0):
-        return {"status": "at_prompt"}
-
-    return {"status": "unknown"}
-```
-
-## Agent Loop Pattern
-
-```python
-class TUIAgent:
-    def __init__(self, command):
+class PtyboxDriver:
+    def __init__(self, command, policy_path):
+        self.seq = 0
         self.proc = subprocess.Popen(
-            ["ptybox", "driver", "--stdio", "--json", "--"] + command,
+            [
+                "ptybox", "driver", "--stdio", "--json",
+                "--policy", policy_path,
+                "--", *command,
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            text=True
+            text=True,
         )
-        self.history = []
 
-    def send(self, action):
-        request = {"protocol_version": 1, "action": action}
-        self.proc.stdin.write(json.dumps(request) + "\n")
+    def send(self, action, timeout_ms=None):
+        self.seq += 1
+        request_id = f"req-{self.seq}"
+        req = {
+            "protocol_version": 2,
+            "request_id": request_id,
+            "action": action,
+        }
+        if timeout_ms is not None:
+            req["timeout_ms"] = timeout_ms
+
+        self.proc.stdin.write(json.dumps(req) + "\n")
         self.proc.stdin.flush()
 
-        response = self.proc.stdout.readline()
-        observation = json.loads(response)
-        self.history.append({"action": action, "observation": observation})
-        return observation
+        resp = json.loads(self.proc.stdout.readline())
+        assert resp["request_id"] == request_id
+        return resp
 
-    def get_screen_text(self):
-        """Get current screen as readable text."""
-        if not self.history:
-            return ""
-        return "\n".join(self.history[-1]["observation"]["screen"]["lines"])
-
-    def wait_for_text(self, text, timeout_ms=5000):
-        """Wait for text to appear on screen."""
-        return self.send({
-            "type": "wait",
-            "payload": {
-                "condition": {"type": "screen_contains", "payload": {"text": text}},
-                "timeout_ms": timeout_ms
-            }
-        })
-
-    def type_text(self, text):
-        return self.send({"type": "text", "payload": {"text": text}})
-
-    def press_key(self, key):
-        return self.send({"type": "key", "payload": {"key": key}})
-
-    def terminate(self):
+    def close(self):
         self.send({"type": "terminate", "payload": {}})
         self.proc.wait()
 ```
 
-## Best Practices
+## Deterministic loop pattern
 
-### 1. Always Wait for Ready State
+1. Send one action.
+2. Require one response with matching `request_id`.
+3. If `status == "error"`, branch on `error.code`.
+4. If `status == "ok"`, decide next action from `observation.screen.lines` + `events`.
+5. End with `terminate`.
 
-Before interacting, wait for the application to be ready:
+## Artifact/replay flow for agents
 
-```python
-agent = TUIAgent(["./app"])
-agent.wait_for_text("Enter command:")  # Wait for prompt
-agent.type_text("help")
-agent.press_key("Enter")
-```
+When `--artifacts` is enabled, driver sessions include replay inputs:
 
-### 2. Use Timeouts
+- `driver-actions.jsonl`
+- `scenario.json` (generated from actions)
+- `run.json`, `events.jsonl`, `snapshots/`, `transcript.log`, `checksums.json`
 
-Avoid hanging on wait conditions:
-
-```python
-try:
-    agent.wait_for_text("Success", timeout_ms=10000)
-except TimeoutError:
-    print("Operation timed out, current screen:", agent.get_screen_text())
-```
-
-### 3. Handle Errors Gracefully
-
-Check for error conditions on screen:
-
-```python
-obs = agent.type_text("invalid-command")
-screen = "\n".join(obs["screen"]["lines"])
-
-if "error" in screen.lower() or "invalid" in screen.lower():
-    # Take corrective action
-    agent.press_key("Escape")
-```
-
-### 4. Clean Termination
-
-Always terminate the session:
-
-```python
-try:
-    # ... interaction logic ...
-finally:
-    agent.terminate()
-```
-
-### 5. State Verification
-
-Verify state after important actions:
-
-```python
-agent.type_text("save")
-agent.press_key("Enter")
-
-obs = agent.wait_for_text("Saved", timeout_ms=2000)
-if "Saved" not in "\n".join(obs["screen"]["lines"]):
-    raise Exception("Save failed")
-```
-
-## Debugging Agent Interactions
-
-### Enable Verbose Logging
+This allows deterministic regression checks via:
 
 ```bash
-ptybox driver --stdio --json --verbose -- ./app 2>debug.log
+ptybox replay --json --artifacts ./artifacts
+ptybox replay-report --json --artifacts ./artifacts
 ```
 
-### Save Session Transcript
+## Troubleshooting
 
-Record all interactions for replay:
+- `E_POLICY_DENIED`: executable/cwd/filesystem permissions not allowlisted.
+- `E_PROTOCOL_VERSION_MISMATCH`: request used unsupported protocol version.
+- `E_PROTOCOL`: malformed NDJSON or invalid action payload.
+- `E_TIMEOUT`: wait/runtime/output/snapshot/action budget exceeded.
 
-```python
-with open("session.jsonl", "w") as f:
-    for entry in agent.history:
-        f.write(json.dumps(entry) + "\n")
-```
-
-### Visual Trace
-
-Generate an HTML trace from recorded artifacts:
-
-```bash
-ptybox trace artifacts/ --output trace.html
-```
-
-## Protocol Reference
-
-See [Protocol Reference](../reference/protocol.md) for complete protocol documentation.
-
-Run `ptybox protocol-help --json` for machine-readable schema.
+Use `ptybox protocol-help --json` for machine-readable schemas.

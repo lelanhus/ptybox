@@ -1501,7 +1501,7 @@ fn wait_for_condition(
             return Ok(observation);
         }
 
-        std::thread::sleep(Duration::from_millis(10));
+        pause_until(deadline, Duration::from_millis(10));
     }
 }
 
@@ -1649,6 +1649,19 @@ fn elapsed_ms(started_at: &Instant) -> u64 {
     #[allow(clippy::cast_possible_truncation)]
     let ms = started_at.elapsed().as_millis() as u64;
     ms
+}
+
+fn pause_until(deadline: Instant, max_step: Duration) {
+    let now = Instant::now();
+    if now >= deadline {
+        return;
+    }
+    let remaining = deadline.saturating_duration_since(now);
+    if remaining <= Duration::from_micros(500) {
+        std::thread::yield_now();
+        return;
+    }
+    std::thread::sleep(remaining.min(max_step));
 }
 
 struct SpawnCommand {

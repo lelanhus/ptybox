@@ -89,7 +89,7 @@ cat artifacts/events.jsonl | jq 'select(.transcript_delta != null)'
 2. Increase total budget:
 ```json
 {
-  "budgets": {"total_runtime_ms": 120000}
+  "budgets": {"max_runtime_ms": 120000}
 }
 ```
 
@@ -135,13 +135,13 @@ RUN apt-get update && apt-get install -y procps
 1. Add a wait after launching:
 ```json
 {"steps": [
-  {"action": {"type": "wait", "payload": {"condition": {"type": "delay", "payload": {"ms": 100}}}}}
+  {"action": {"type": "wait", "payload": {"condition": {"type": "screen_contains", "payload": {"text": "Ready"}}}}}
 ]}
 ```
 
 2. Check if application requires specific terminal size:
 ```json
-{"terminal_size": {"rows": 24, "cols": 80}}
+{"run": {"initial_size": {"rows": 24, "cols": 80}}}
 ```
 
 3. Verify application output by checking transcript:
@@ -157,12 +157,12 @@ cat artifacts/events.jsonl | jq -r '.transcript_delta // empty'
 
 1. View the actual screen content:
 ```bash
-cat artifacts/snapshots/step_*/snapshot.json | jq -r '.lines[]'
+cat artifacts/snapshots/000001.json | jq -r '.lines[]'
 ```
 
 2. Compare with expectation:
 ```bash
-ptybox trace --open artifacts/
+ptybox trace --artifacts artifacts -o trace.html
 ```
 
 **Common issues:**
@@ -204,7 +204,7 @@ docker run --rm \
 Run with verbose mode for extra logging:
 
 ```bash
-ptybox exec --verbose --json ... 2>debug.log
+ptybox run --verbose --json --scenario scenario.yaml 2>debug.log
 ```
 
 ### Trace Viewer
@@ -212,7 +212,7 @@ ptybox exec --verbose --json ... 2>debug.log
 Generate an HTML trace for visual debugging:
 
 ```bash
-ptybox trace artifacts/ --output trace.html
+ptybox trace --artifacts artifacts -o trace.html
 open trace.html  # or xdg-open on Linux
 ```
 
@@ -240,13 +240,13 @@ cat artifacts/checksums.json
 Test actions interactively:
 
 ```bash
-ptybox driver --stdio --json -- ./app
+ptybox driver --stdio --json --policy policy.json -- ./app
 ```
 
 Then send actions manually:
 
 ```json
-{"protocol_version": 1, "action": {"type": "text", "payload": {"text": "hello"}}}
+{"protocol_version": 2, "request_id": "req-1", "action": {"type": "text", "payload": {"text": "hello"}}}
 ```
 
 ## Getting Help

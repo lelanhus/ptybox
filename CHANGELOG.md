@@ -7,6 +7,10 @@ This project aims to follow “Keep a Changelog” style entries and Semantic Ve
 ## [Unreleased]
 
 ### Added
+- Driver protocol v2 envelopes: `DriverRequestV2` and `DriverResponseV2` with `request_id` correlation and per-action metrics.
+- New `ptybox::driver` library module with typed `DriverConfig` and reusable `run_driver()` engine.
+- Driver artifact action log `driver-actions.jsonl`, plus generated replay-compatible `scenario.json` for driver sessions.
+- JSON schemas for driver protocol v2: `spec/schemas/driver-request-v2.schema.json` and `spec/schemas/driver-response-v2.schema.json`.
 - Cargo workspace with library (`crates/ptybox`) and CLI (`crates/ptybox-cli`).
 - Core data model types matching the spec (policy, scenario, actions, observations, run results).
 - PTY session runner with key/text/resize/terminate support and canonical terminal snapshots.
@@ -22,6 +26,12 @@ This project aims to follow “Keep a Changelog” style entries and Semantic Ve
 - Release verification helper script (`scripts/release-verify.sh`) to validate expected tarballs, binary contents, and checksum integrity.
 
 ### Changed
+- `PROTOCOL_VERSION` bumped from `1` to `2` (driver cutover to v2 envelope protocol).
+- `ptybox driver` CLI now supports the same security/artifact controls as `exec`/`run` (`--policy`, `--cwd`, `--artifacts`, `--overwrite`, sandbox/network/write acknowledgements).
+- Driver startup now validates full run policy (including executable allowlist and cwd checks) before spawning sessions.
+- Session/runner wait loops now use deadline-based polling instead of fixed sleeps for more deterministic behavior.
+- Driver observations now populate structured runtime events (`pty_output`, `pty_eof`) instead of empty defaults.
+- Key handling now includes `F1`-`F12` and `Ctrl+<char>` in protocol-consistent parsing.
 - Release workflow now enforces artifact guardrails (expected tarballs, non-empty checksums, and checksum verification) before publishing.
 - Install docs now prioritize GitHub release binaries with checksum verification, then crates.io install, then source build fallback.
 - Crate metadata now includes `readme` and `documentation` fields for publish quality in `ptybox` and `ptybox-cli`.

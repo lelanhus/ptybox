@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "driver-request-v2.schema.json",
+  "type": "object",
+  "required": ["protocol_version", "request_id", "action"],
+  "properties": {
+    "protocol_version": { "type": "integer", "const": 2 },
+    "request_id": { "type": "string", "minLength": 1 },
+    "action": { "$ref": "scenario.schema.json#/$defs/Action" },
+    "timeout_ms": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "null" }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

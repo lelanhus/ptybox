@@ -26,6 +26,7 @@ use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ptybox::model::policy::{
@@ -33,9 +34,11 @@ use ptybox::model::policy::{
     SandboxMode, POLICY_VERSION,
 };
 use ptybox::model::{
-    Action, ActionType, Assertion, Observation, RunResult, RunStatus, Scenario, ScenarioMetadata,
-    Step, StepId, TerminalSize, PROTOCOL_VERSION,
+    Action, ActionType, Assertion, DriverResponseStatus, DriverResponseV2, Observation, RunResult,
+    RunStatus, Scenario, ScenarioMetadata, Step, StepId, TerminalSize, PROTOCOL_VERSION,
 };
+
+static DRIVER_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 fn temp_dir(prefix: &str) -> PathBuf {
     let mut dir = std::env::temp_dir();
@@ -88,6 +91,18 @@ fn base_policy(work_dir: &Path, allowed_exec: Vec<String>) -> Policy {
     }
 }
 
+fn write_driver_policy(work_dir: &Path, command: &str) -> PathBuf {
+    let policy_path = work_dir.join("driver-policy.json");
+    let policy = base_policy(work_dir, vec![command.to_string()]);
+    write_policy(&policy_path, &policy);
+    policy_path
+}
+
+fn next_driver_request_id() -> String {
+    let sequence = DRIVER_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("req-{sequence}")
+}
+
 fn read_events_transcript(dir: &Path) -> String {
     let data = fs::read_to_string(dir.join("events.jsonl")).unwrap();
     let mut transcript = String::new();
@@ -129,15 +144,30 @@ fn driver_action(
     action_type: &str,
     payload: serde_json::Value,
 ) -> Observation {
+    let request_id = next_driver_request_id();
     let action = serde_json::json!({
         "protocol_version": PROTOCOL_VERSION,
+        "request_id": request_id,
         "action": { "type": action_type, "payload": payload }
     });
     writeln!(stdin, "{}", serde_json::to_string(&action).unwrap()).unwrap();
     stdin.flush().unwrap();
 
     let line = lines.next().unwrap().unwrap();
-    serde_json::from_str(&line).unwrap()
+    let response: DriverResponseV2 = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        response.request_id, request_id,
+        "driver should echo request_id"
+    );
+    assert_eq!(
+        response.status,
+        DriverResponseStatus::Ok,
+        "driver action should succeed: {:?}",
+        response.error
+    );
+    response
+        .observation
+        .expect("successful driver response should include observation")
 }
 
 // ============================================================================
@@ -294,11 +324,20 @@ fn show_size_fixture_displays_terminal_dimensions() {
 
 #[test]
 fn resize_action_updates_terminal_size_via_driver() {
-    let _dir = temp_dir("resize-driver");
+    let dir = temp_dir("resize-driver");
     let fixture = fixture_path("ptybox-show-size");
+    let policy_path = write_driver_policy(&dir, &fixture);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", &fixture])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            &fixture,
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -316,7 +355,7 @@ fn resize_action_updates_terminal_size_via_driver() {
         &mut stdin,
         &mut lines,
         "wait",
-        serde_json::json!({ "condition": { "type": "process_exited" }, "timeout_ms": 100 }),
+        serde_json::json!({ "condition": { "type": "screen_contains", "payload": { "text": "" } }, "timeout_ms": 100 }),
     );
 
     // Default size is 24x80
@@ -539,10 +578,21 @@ fn delay_output_fixture_wait_condition() {
 
 #[test]
 fn driver_protocol_version_mismatch_is_rejected() {
+    let dir = temp_dir("driver-version-mismatch");
     let fixture = fixture_path("ptybox-exit-code");
+    let policy_path = write_driver_policy(&dir, &fixture);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", &fixture, "0"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            &fixture,
+            "0",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -556,20 +606,33 @@ fn driver_protocol_version_mismatch_is_rejected() {
     let mut lines = reader.lines();
 
     // Send action with wrong protocol version
+    let request_id = "req-invalid-version";
     let bad_action = serde_json::json!({
         "protocol_version": 999,  // Invalid version
+        "request_id": request_id,
         "action": { "type": "terminate", "payload": {} }
     });
     writeln!(stdin, "{}", serde_json::to_string(&bad_action).unwrap()).unwrap();
     stdin.flush().unwrap();
 
     let line = lines.next().unwrap().unwrap();
-    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+    let response: DriverResponseV2 = serde_json::from_str(&line).unwrap();
 
     // Should get an error about protocol version mismatch
-    assert!(
-        response.get("error").is_some() || response.get("code").is_some(),
-        "should return an error: {response}"
+    assert_eq!(response.request_id, request_id);
+    assert_eq!(response.status, DriverResponseStatus::Error);
+    let error = response
+        .error
+        .expect("version mismatch should include error");
+    assert_eq!(error.code, "E_PROTOCOL_VERSION_MISMATCH");
+    assert_eq!(
+        error
+            .context
+            .as_ref()
+            .and_then(|value| value.get("supported_version"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default(),
+        PROTOCOL_VERSION as u64
     );
 
     let status = child.wait().unwrap();
@@ -581,10 +644,21 @@ fn driver_protocol_version_mismatch_is_rejected() {
 
 #[test]
 fn driver_malformed_json_returns_protocol_error() {
+    let dir = temp_dir("driver-malformed-json");
     let fixture = fixture_path("ptybox-exit-code");
+    let policy_path = write_driver_policy(&dir, &fixture);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", &fixture, "0"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            &fixture,
+            "0",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -602,13 +676,15 @@ fn driver_malformed_json_returns_protocol_error() {
     stdin.flush().unwrap();
 
     let line = lines.next().unwrap().unwrap();
-    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+    let response: DriverResponseV2 = serde_json::from_str(&line).unwrap();
 
     // Should get a protocol error
-    assert!(
-        response.get("error").is_some() || response.get("code").is_some(),
-        "should return a protocol error: {response}"
-    );
+    assert_eq!(response.request_id, "unknown");
+    assert_eq!(response.status, DriverResponseStatus::Error);
+    let error = response
+        .error
+        .expect("malformed request should include error");
+    assert_eq!(error.code, "E_PROTOCOL");
 
     let status = child.wait().unwrap();
     assert!(
@@ -619,12 +695,21 @@ fn driver_malformed_json_returns_protocol_error() {
 
 #[test]
 fn driver_key_action_sends_input() {
-    let _dir = temp_dir("driver-key");
+    let dir = temp_dir("driver-key");
     // echo_keys prints byte value of each keypress
     let fixture = fixture_path("ptybox-echo-keys");
+    let policy_path = write_driver_policy(&dir, &fixture);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", &fixture])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            &fixture,
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -642,7 +727,7 @@ fn driver_key_action_sends_input() {
         &mut stdin,
         &mut lines,
         "wait",
-        serde_json::json!({ "condition": { "type": "process_exited" }, "timeout_ms": 100 }),
+        serde_json::json!({ "condition": { "type": "screen_contains", "payload": { "text": "" } }, "timeout_ms": 100 }),
     );
 
     // Send a key action
@@ -669,11 +754,20 @@ fn driver_key_action_sends_input() {
 
 #[test]
 fn driver_text_action_sends_input() {
-    let _dir = temp_dir("driver-text");
+    let dir = temp_dir("driver-text");
     let fixture = "/bin/cat".to_string();
+    let policy_path = write_driver_policy(&dir, &fixture);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", &fixture])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            &fixture,
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -691,7 +785,7 @@ fn driver_text_action_sends_input() {
         &mut stdin,
         &mut lines,
         "wait",
-        serde_json::json!({ "condition": { "type": "process_exited" }, "timeout_ms": 100 }),
+        serde_json::json!({ "condition": { "type": "screen_contains", "payload": { "text": "" } }, "timeout_ms": 100 }),
     );
 
     // Send text

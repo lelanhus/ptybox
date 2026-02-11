@@ -62,7 +62,7 @@
 //! before the session goes out of scope.
 
 use crate::model::PROTOCOL_VERSION;
-use crate::model::{Action, ActionType, Observation, RunId, SessionId, TerminalSize};
+use crate::model::{Action, ActionType, Event, Observation, RunId, SessionId, TerminalSize};
 use crate::policy::apply_env_policy;
 use crate::runner::RunnerError;
 use crate::terminal::Terminal;
@@ -392,7 +392,7 @@ impl Session {
                     if Instant::now() >= deadline {
                         break;
                     }
-                    std::thread::sleep(Duration::from_millis(5));
+                    pause_until(deadline, Duration::from_millis(5));
                 }
                 Err(err) => return Err(RunnerError::io("E_IO", "failed to read pty", err)),
             }
@@ -408,6 +408,21 @@ impl Session {
         })?;
         terminal.process_bytes(&total);
         let snapshot = terminal.snapshot()?;
+        let mut events = Vec::new();
+        if !total.is_empty() {
+            events.push(Event {
+                event_type: "pty_output".to_string(),
+                message: Some("terminal output read".to_string()),
+                details: Some(serde_json::json!({ "bytes": total.len() })),
+            });
+        }
+        if saw_eof {
+            events.push(Event {
+                event_type: "pty_eof".to_string(),
+                message: Some("pty reached EOF".to_string()),
+                details: None,
+            });
+        }
         Ok(Observation {
             protocol_version: PROTOCOL_VERSION,
             run_id: self.run_id,
@@ -417,7 +432,7 @@ impl Session {
             timestamp_ms: { self.started_at.elapsed().as_millis() as u64 },
             screen: snapshot,
             transcript_delta,
-            events: Vec::new(),
+            events,
         })
     }
 
@@ -507,7 +522,7 @@ impl Session {
                     if Instant::now() >= deadline {
                         return Ok(None);
                     }
-                    std::thread::sleep(Duration::from_millis(10));
+                    pause_until(deadline, Duration::from_millis(10));
                 }
                 Err(err) => {
                     return Err(RunnerError::io("E_IO", "failed to wait for child", err));
@@ -588,6 +603,18 @@ fn signal_process_group(pgid: Pid, signal: Signal) -> Result<(), RunnerError> {
 
 const SUPPORTED_KEYS: &[&str] = &[
     "Enter",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
     "Up",
     "Down",
     "Left",
@@ -603,8 +630,24 @@ const SUPPORTED_KEYS: &[&str] = &[
 ];
 
 fn key_to_bytes(key: &str) -> Result<Vec<u8>, RunnerError> {
+    if let Some(ctrl) = parse_ctrl_key(key) {
+        return Ok(vec![ctrl]);
+    }
+
     let bytes = match key {
         "Enter" => vec![b'\r'],
+        "F1" => b"\x1bOP".to_vec(),
+        "F2" => b"\x1bOQ".to_vec(),
+        "F3" => b"\x1bOR".to_vec(),
+        "F4" => b"\x1bOS".to_vec(),
+        "F5" => b"\x1b[15~".to_vec(),
+        "F6" => b"\x1b[17~".to_vec(),
+        "F7" => b"\x1b[18~".to_vec(),
+        "F8" => b"\x1b[19~".to_vec(),
+        "F9" => b"\x1b[20~".to_vec(),
+        "F10" => b"\x1b[21~".to_vec(),
+        "F11" => b"\x1b[23~".to_vec(),
+        "F12" => b"\x1b[24~".to_vec(),
         "Up" => b"\x1b[A".to_vec(),
         "Down" => b"\x1b[B".to_vec(),
         "Right" => b"\x1b[C".to_vec(),
@@ -627,13 +670,40 @@ fn key_to_bytes(key: &str) -> Result<Vec<u8>, RunnerError> {
                 serde_json::json!({
                     "received_key": key,
                     "supported_keys": SUPPORTED_KEYS,
-                    "note": "Single characters are also supported (e.g., 'a', '1', '@')",
+                    "note": "Single characters and Ctrl+<char> are also supported (e.g., 'a', 'Ctrl+C')",
                     "example": {"type": "key", "payload": {"key": "Enter"}}
                 }),
             ));
         }
     };
     Ok(bytes)
+}
+
+fn parse_ctrl_key(key: &str) -> Option<u8> {
+    let suffix = key
+        .strip_prefix("Ctrl+")
+        .or_else(|| key.strip_prefix("ctrl+"))?;
+    let [byte] = suffix.as_bytes() else {
+        return None;
+    };
+    let ch = byte.to_ascii_uppercase();
+    if !ch.is_ascii_uppercase() {
+        return None;
+    }
+    Some(ch - b'@')
+}
+
+fn pause_until(deadline: Instant, max_step: Duration) {
+    let now = Instant::now();
+    if now >= deadline {
+        return;
+    }
+    let remaining = deadline.saturating_duration_since(now);
+    if remaining <= Duration::from_micros(500) {
+        std::thread::yield_now();
+        return;
+    }
+    std::thread::sleep(remaining.min(max_step));
 }
 
 impl Session {
@@ -709,7 +779,7 @@ impl Session {
                 if self.child.try_wait().ok().flatten().is_some() {
                     return;
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                pause_until(deadline, Duration::from_millis(5));
             }
 
             // Still alive, force kill (don't wait for SIGKILL to complete)

@@ -1,83 +1,77 @@
-# Replay & Normalization
+# Replay Guide
 
-Record runs and compare against baselines for regression testing.
+`ptybox replay` re-runs the scenario captured in an artifacts directory and compares the replay run against the original bundle.
 
-## Recording a Baseline
-
-```bash
-ptybox run --json --scenario test.yaml --artifacts ./baseline
-```
-
-## Replaying Against Baseline
+## 1) Record artifacts
 
 ```bash
-ptybox replay --baseline ./baseline --artifacts ./current
+ptybox run --json --scenario ./scenario.yaml --artifacts ./artifacts --overwrite
 ```
 
-Exit code 0 means match, exit code 11 (`E_REPLAY_MISMATCH`) means difference.
+Required baseline files are generated in `./artifacts` (for example `scenario.json`, `policy.json`, `run.json`, `snapshots/`, `transcript.log`).
 
-## Normalization
-
-Some outputs are non-deterministic (timestamps, PIDs). Use normalization filters:
+## 2) Replay deterministically
 
 ```bash
-ptybox replay --baseline ./baseline --artifacts ./current \
-  --normalize timestamps \
-  --normalize pids
+ptybox replay --json --artifacts ./artifacts
 ```
 
-### Available Filters
+- exit `0`: replay matched
+- exit `11`: replay mismatch (`E_REPLAY_MISMATCH`)
 
-| Filter | Description |
-|--------|-------------|
-| `none` | Strict comparison, no normalization |
-| `all` | Apply all normalizations |
-| `timestamps` | Normalize time-like patterns |
-| `pids` | Normalize process IDs |
-| `snapshot_id` | Ignore snapshot IDs |
-| `run_id` | Ignore run IDs |
+On each replay, `ptybox` writes a `replay-<run_id>/` folder under the original artifacts directory with:
 
-### Policy-Based Normalization
+- `run.json` for the replay execution
+- `replay.json` summary
+- `diff.json` when mismatch occurs
 
-Define normalization in the policy:
+## Normalization controls
 
-```json
-{
-  "replay": {
-    "normalization": {
-      "defaults": ["timestamps", "pids"],
-      "strict": false,
-      "rules": [
-        { "pattern": "\\d{4}-\\d{2}-\\d{2}", "replacement": "DATE" }
-      ]
-    }
-  }
-}
-```
+Replay can ignore known nondeterministic fields.
 
-## Replay Report
-
-Generate an HTML diff report:
+### Strict
 
 ```bash
-ptybox replay-report --baseline ./baseline --output diff.html
+ptybox replay --json --artifacts ./artifacts --strict
 ```
 
-## CI Integration
-
-```yaml
-# GitHub Actions example
-- name: Run tests
-  run: ptybox run --scenario test.yaml --artifacts ./current
-
-- name: Compare to baseline
-  run: ptybox replay --baseline ./baseline --artifacts ./current
-```
-
-## Strict Mode
-
-Disable all normalization for exact comparison:
+### Explicit filters
 
 ```bash
-ptybox replay --baseline ./baseline --artifacts ./current --strict
+ptybox replay --json --artifacts ./artifacts \
+  --normalize run_id \
+  --normalize session_id
+```
+
+Supported `--normalize` values:
+
+- `all`
+- `none`
+- `snapshot_id`
+- `run_id`
+- `run_timestamps`
+- `step_timestamps`
+- `observation_timestamp`
+- `session_id`
+
+### Explain resolved replay settings
+
+```bash
+ptybox replay --json --artifacts ./artifacts --explain
+```
+
+## Integrity gates
+
+Require event/checksum files during replay:
+
+```bash
+ptybox replay --json --artifacts ./artifacts --require-events --require-checksums
+```
+
+## Replay report
+
+Read the most recent replay summary:
+
+```bash
+ptybox replay-report --json --artifacts ./artifacts
 ```

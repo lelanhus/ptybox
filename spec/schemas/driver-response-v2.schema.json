@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "driver-response-v2.schema.json",
+  "type": "object",
+  "required": ["protocol_version", "request_id", "status"],
+  "properties": {
+    "protocol_version": { "type": "integer", "const": 2 },
+    "request_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["ok", "error"] },
+    "observation": {
+      "oneOf": [
+        { "$ref": "observation.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "error": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorInfo" },
+        { "type": "null" }
+      ]
+    },
+    "action_metrics": {
+      "oneOf": [
+        { "$ref": "#/$defs/ActionMetrics" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ActionMetrics": {
+      "type": "object",
+      "required": ["sequence", "duration_ms"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1 },
+        "duration_ms": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "ErrorInfo": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "context": {}
+      },
+      "additionalProperties": false
+    }
+  }
+}

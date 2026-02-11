@@ -17,16 +17,33 @@
 //! The driver command is the primary interface for LLM agents to interact with
 //! TUI applications via a stable JSON protocol.
 
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use ptybox::model::{Observation, PROTOCOL_VERSION};
+use ptybox::model::policy::PolicyBuilder;
+use ptybox::model::{DriverResponseStatus, DriverResponseV2, PROTOCOL_VERSION};
 use serde_json::json;
+
+static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Helper to spawn the driver process with stdio pipes.
 fn spawn_driver(command: &str) -> Child {
+    let policy_path = write_driver_policy(command);
+
     Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", command])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().expect("policy path should be utf-8"),
+            "--",
+            command,
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -34,8 +51,56 @@ fn spawn_driver(command: &str) -> Child {
         .expect("failed to spawn driver")
 }
 
-/// Send an action to the driver and read the observation response.
-fn send_action(child: &mut Child, action: serde_json::Value) -> Observation {
+fn temp_dir(prefix: &str) -> PathBuf {
+    let mut dir = std::env::temp_dir();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let sequence = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    dir.push(format!("ptybox-driver-test-{prefix}-{stamp}-{sequence}"));
+    fs::create_dir_all(&dir).expect("failed to create temp dir");
+    dir
+}
+
+fn write_driver_policy(command: &str) -> PathBuf {
+    let dir = temp_dir("policy");
+    let policy_path = dir.join("policy.json");
+    let policy = PolicyBuilder::new()
+        .sandbox_disabled()
+        .allowed_executables(vec![command.to_string()])
+        .build();
+    let payload = serde_json::to_vec_pretty(&policy).expect("failed to serialize policy");
+    fs::write(&policy_path, payload).expect("failed to write policy");
+    policy_path
+}
+
+fn write_driver_policy_with_artifacts(command: &str, artifacts_dir: &Path) -> PathBuf {
+    let dir = temp_dir("policy-artifacts");
+    let policy_path = dir.join("policy.json");
+    let policy = PolicyBuilder::new()
+        .sandbox_disabled()
+        .allowed_executables(vec![command.to_string()])
+        .allowed_write(vec![artifacts_dir.display().to_string()])
+        .build();
+    let payload = serde_json::to_vec_pretty(&policy).expect("failed to serialize policy");
+    fs::write(&policy_path, payload).expect("failed to write policy");
+    policy_path
+}
+
+fn request(request_id: &str, action_type: &str, payload: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "protocol_version": PROTOCOL_VERSION,
+        "request_id": request_id,
+        "action": {
+            "type": action_type,
+            "payload": payload
+        }
+    })
+}
+
+/// Send an action to the driver and read the response envelope.
+fn send_action(child: &mut Child, action: serde_json::Value) -> DriverResponseV2 {
     let stdin = child.stdin.as_mut().expect("stdin not available");
     let line = serde_json::to_string(&action).expect("failed to serialize action");
     writeln!(stdin, "{}", line).expect("failed to write to stdin");
@@ -48,7 +113,7 @@ fn send_action(child: &mut Child, action: serde_json::Value) -> Observation {
         .read_line(&mut response)
         .expect("failed to read response");
 
-    serde_json::from_str(&response).expect("failed to parse observation")
+    serde_json::from_str(&response).expect("failed to parse driver response")
 }
 
 /// Read raw response line from driver stdout.
@@ -115,6 +180,25 @@ fn driver_requires_command() {
     assert!(!output.status.success());
 }
 
+#[test]
+fn driver_rejects_non_allowlisted_executable() {
+    let policy_path = write_driver_policy("/bin/echo");
+    let output = Command::new(env!("CARGO_BIN_EXE_ptybox"))
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/cat",
+        ])
+        .output()
+        .expect("failed to run command");
+
+    assert_eq!(output.status.code(), Some(2));
+}
+
 // =============================================================================
 // Action Type Tests
 // =============================================================================
@@ -123,26 +207,24 @@ fn driver_requires_command() {
 fn driver_accepts_text_action() {
     let mut child = spawn_driver("/bin/cat");
 
-    let action = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "text",
-            "payload": {"text": "hello"}
-        }
-    });
-
-    let obs = send_action(&mut child, action);
-    assert!(obs.timestamp_ms > 0);
+    let response = send_action(
+        &mut child,
+        request("req-text", "text", json!({"text": "hello"})),
+    );
+    assert_eq!(response.status, DriverResponseStatus::Ok);
+    let observation = response.observation.expect("observation should be present");
+    assert!(observation.timestamp_ms > 0);
+    assert_eq!(
+        response
+            .action_metrics
+            .as_ref()
+            .expect("metrics should be present")
+            .sequence,
+        1
+    );
 
     // Terminate cleanly
-    let terminate = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "terminate",
-            "payload": {}
-        }
-    });
-    let _ = send_action(&mut child, terminate);
+    let _ = send_action(&mut child, request("req-term", "terminate", json!({})));
     let _ = child.wait();
 }
 
@@ -150,26 +232,16 @@ fn driver_accepts_text_action() {
 fn driver_accepts_key_action() {
     let mut child = spawn_driver("/bin/cat");
 
-    let action = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "key",
-            "payload": {"key": "Enter"}
-        }
-    });
-
-    let obs = send_action(&mut child, action);
-    assert!(obs.timestamp_ms > 0);
+    let response = send_action(
+        &mut child,
+        request("req-key", "key", json!({"key": "Enter"})),
+    );
+    assert_eq!(response.status, DriverResponseStatus::Ok);
+    let observation = response.observation.expect("observation should be present");
+    assert!(observation.timestamp_ms > 0);
 
     // Terminate cleanly
-    let terminate = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "terminate",
-            "payload": {}
-        }
-    });
-    let _ = send_action(&mut child, terminate);
+    let _ = send_action(&mut child, request("req-term", "terminate", json!({})));
     let _ = child.wait();
 }
 
@@ -177,28 +249,18 @@ fn driver_accepts_key_action() {
 fn driver_accepts_resize_action() {
     let mut child = spawn_driver("/bin/cat");
 
-    let action = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "resize",
-            "payload": {"rows": 30, "cols": 100}
-        }
-    });
-
-    let obs = send_action(&mut child, action);
-    assert!(obs.timestamp_ms > 0);
-    assert_eq!(obs.screen.rows, 30);
-    assert_eq!(obs.screen.cols, 100);
+    let response = send_action(
+        &mut child,
+        request("req-resize", "resize", json!({"rows": 30, "cols": 100})),
+    );
+    assert_eq!(response.status, DriverResponseStatus::Ok);
+    let observation = response.observation.expect("observation should be present");
+    assert!(observation.timestamp_ms > 0);
+    assert_eq!(observation.screen.rows, 30);
+    assert_eq!(observation.screen.cols, 100);
 
     // Terminate cleanly
-    let terminate = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "terminate",
-            "payload": {}
-        }
-    });
-    let _ = send_action(&mut child, terminate);
+    let _ = send_action(&mut child, request("req-term", "terminate", json!({})));
     let _ = child.wait();
 }
 
@@ -206,17 +268,15 @@ fn driver_accepts_resize_action() {
 fn driver_terminate_exits_cleanly() {
     let mut child = spawn_driver("/bin/cat");
 
-    let terminate = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "terminate",
-            "payload": {}
-        }
-    });
-
-    let obs = send_action(&mut child, terminate);
-    // Observation is returned (timestamp_ms may be 0 if immediate)
-    assert!(obs.protocol_version > 0);
+    let response = send_action(&mut child, request("req-term", "terminate", json!({})));
+    assert_eq!(response.status, DriverResponseStatus::Ok);
+    assert!(
+        response
+            .observation
+            .expect("observation should be present")
+            .protocol_version
+            > 0
+    );
 
     let status = child.wait().expect("failed to wait for child");
     assert!(status.success());
@@ -228,8 +288,17 @@ fn driver_terminate_exits_cleanly() {
 
 #[test]
 fn driver_rejects_wrong_protocol_version() {
+    let policy_path = write_driver_policy("/bin/cat");
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", "/bin/cat"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/cat",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -238,6 +307,7 @@ fn driver_rejects_wrong_protocol_version() {
 
     let action = json!({
         "protocol_version": 999,
+        "request_id": "req-wrong-version",
         "action": {
             "type": "text",
             "payload": {"text": "hello"}
@@ -264,8 +334,17 @@ fn driver_rejects_wrong_protocol_version() {
 
 #[test]
 fn driver_version_mismatch_includes_context() {
+    let policy_path = write_driver_policy("/bin/cat");
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", "/bin/cat"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/cat",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -274,6 +353,7 @@ fn driver_version_mismatch_includes_context() {
 
     let action = json!({
         "protocol_version": 42,
+        "request_id": "req-version-context",
         "action": {
             "type": "text",
             "payload": {"text": "hello"}
@@ -295,7 +375,7 @@ fn driver_version_mismatch_includes_context() {
         response
     );
     assert!(
-        error["context"]["supported_version"].is_number(),
+        error["error"]["context"]["supported_version"].is_number(),
         "should include supported_version in context"
     );
 
@@ -308,8 +388,17 @@ fn driver_version_mismatch_includes_context() {
 
 #[test]
 fn driver_rejects_malformed_json() {
+    let policy_path = write_driver_policy("/bin/cat");
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", "/bin/cat"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/cat",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -333,8 +422,17 @@ fn driver_rejects_malformed_json() {
 
 #[test]
 fn driver_malformed_json_includes_helpful_context() {
+    let policy_path = write_driver_policy("/bin/cat");
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", "/bin/cat"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/cat",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -350,26 +448,16 @@ fn driver_malformed_json_includes_helpful_context() {
 
     // Should include helpful context
     assert!(
-        error["context"]["parse_error"].is_string(),
+        error["error"]["context"]["parse_error"].is_string(),
         "should include parse_error, got: {:?}",
         error
     );
     assert!(
-        error["context"]["expected_schema"].is_object(),
-        "should include expected_schema, got: {:?}",
-        error
-    );
-    assert!(
-        error["context"]["example"].is_object(),
-        "should include example, got: {:?}",
-        error
-    );
-    assert!(
-        error["context"]["hint"]
+        error["error"]["context"]["hint"]
             .as_str()
             .unwrap_or("")
-            .contains("protocol-help"),
-        "should suggest protocol-help command, got: {:?}",
+            .contains("DriverRequestV2"),
+        "should include schema hint, got: {:?}",
         error
     );
 
@@ -378,8 +466,17 @@ fn driver_malformed_json_includes_helpful_context() {
 
 #[test]
 fn driver_rejects_missing_protocol_version() {
+    let policy_path = write_driver_policy("/bin/cat");
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", "/bin/cat"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/cat",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -411,8 +508,17 @@ fn driver_rejects_missing_protocol_version() {
 
 #[test]
 fn driver_rejects_missing_action() {
+    let policy_path = write_driver_policy("/bin/cat");
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
-        .args(["driver", "--stdio", "--json", "--", "/bin/cat"])
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--",
+            "/bin/cat",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -454,13 +560,7 @@ fn driver_ignores_empty_lines() {
         writeln!(stdin, "   ").expect("failed to write");
 
         // Now send a real action
-        let action = json!({
-            "protocol_version": PROTOCOL_VERSION,
-            "action": {
-                "type": "text",
-                "payload": {"text": "hello"}
-            }
-        });
+        let action = request("req-text", "text", json!({"text": "hello"}));
         let line = serde_json::to_string(&action).expect("failed to serialize");
         writeln!(stdin, "{}", line).expect("failed to write");
         stdin.flush().expect("failed to flush");
@@ -468,18 +568,19 @@ fn driver_ignores_empty_lines() {
 
     // Should get a valid response (empty lines didn't cause errors)
     let response = read_response_line(&mut child);
-    let obs: Observation = serde_json::from_str(&response).expect("failed to parse observation");
-    assert!(obs.timestamp_ms > 0);
+    let envelope: DriverResponseV2 =
+        serde_json::from_str(&response).expect("failed to parse response");
+    assert_eq!(envelope.status, DriverResponseStatus::Ok);
+    assert!(
+        envelope
+            .observation
+            .expect("observation should be present")
+            .timestamp_ms
+            > 0
+    );
 
     // Terminate cleanly
-    let terminate = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "terminate",
-            "payload": {}
-        }
-    });
-    let _ = send_action(&mut child, terminate);
+    let _ = send_action(&mut child, request("req-term", "terminate", json!({})));
     let _ = child.wait();
 }
 
@@ -501,26 +602,33 @@ fn driver_multiple_actions_sequential() {
 
     // Send multiple text actions
     for i in 0..5 {
-        let action = json!({
-            "protocol_version": PROTOCOL_VERSION,
-            "action": {
-                "type": "text",
-                "payload": {"text": format!("msg{}", i)}
-            }
-        });
-        let obs = send_action(&mut child, action);
-        assert!(obs.timestamp_ms > 0);
+        let response = send_action(
+            &mut child,
+            request(
+                &format!("req-{i}"),
+                "text",
+                json!({"text": format!("msg{}", i)}),
+            ),
+        );
+        assert_eq!(response.status, DriverResponseStatus::Ok);
+        assert!(
+            response
+                .observation
+                .expect("observation should be present")
+                .timestamp_ms
+                > 0
+        );
+        assert_eq!(
+            response
+                .action_metrics
+                .expect("metrics should be present")
+                .sequence,
+            i + 1
+        );
     }
 
     // Terminate cleanly
-    let terminate = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "terminate",
-            "payload": {}
-        }
-    });
-    let _ = send_action(&mut child, terminate);
+    let _ = send_action(&mut child, request("req-term", "terminate", json!({})));
     let _ = child.wait();
 }
 
@@ -528,44 +636,34 @@ fn driver_multiple_actions_sequential() {
 fn driver_observation_includes_screen_snapshot() {
     let mut child = spawn_driver("/bin/cat");
 
-    let action = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "text",
-            "payload": {"text": "visible"}
-        }
-    });
-
-    let obs = send_action(&mut child, action);
+    let response = send_action(
+        &mut child,
+        request("req-visible", "text", json!({"text": "visible"})),
+    );
+    assert_eq!(response.status, DriverResponseStatus::Ok);
+    let obs = response.observation.expect("observation should be present");
     assert!(!obs.screen.lines.is_empty(), "screen should have lines");
 
     // Terminate cleanly
-    let terminate = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "terminate",
-            "payload": {}
-        }
-    });
-    let _ = send_action(&mut child, terminate);
+    let _ = send_action(&mut child, request("req-term", "terminate", json!({})));
     let _ = child.wait();
 }
 
 #[test]
 fn driver_observation_includes_transcript_delta() {
-    let mut child = spawn_driver("/bin/echo");
+    let mut child = spawn_driver("/bin/cat");
 
-    // echo outputs text then exits, so we should see transcript delta
-    let action = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "action": {
-            "type": "text",
-            "payload": {"text": "ignored"}
-        }
-    });
+    let response = send_action(
+        &mut child,
+        request(
+            "req-transcript",
+            "text",
+            json!({"text": "transcript-check"}),
+        ),
+    );
+    assert_eq!(response.status, DriverResponseStatus::Ok);
+    let obs = response.observation.expect("observation should be present");
 
-    let obs = send_action(&mut child, action);
-    // Echo should have produced some output or exited (shown in events)
     let has_output = obs.transcript_delta.is_some();
     let has_exit_event = obs
         .events
@@ -576,5 +674,72 @@ fn driver_observation_includes_transcript_delta() {
         "expected transcript or exit event"
     );
 
+    let _ = send_action(&mut child, request("req-term", "terminate", json!({})));
     let _ = child.wait();
+}
+
+#[test]
+fn driver_artifacts_are_replay_compatible() {
+    let dir = temp_dir("driver-artifacts");
+    let artifacts_dir = dir.join("artifacts");
+    let policy_path = write_driver_policy_with_artifacts("/bin/cat", &artifacts_dir);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ptybox"))
+        .args([
+            "driver",
+            "--stdio",
+            "--json",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--artifacts",
+            artifacts_dir.to_str().unwrap(),
+            "--overwrite",
+            "--",
+            "/bin/cat",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn driver");
+
+    let response = send_action(
+        &mut child,
+        request("req-text", "text", json!({"text": "replay-check"})),
+    );
+    assert_eq!(response.status, DriverResponseStatus::Ok);
+    let _ = send_action(&mut child, request("req-term", "terminate", json!({})));
+
+    let status = child.wait().expect("failed to wait for child");
+    assert!(status.success());
+
+    for required in [
+        "driver-actions.jsonl",
+        "scenario.json",
+        "run.json",
+        "events.jsonl",
+        "transcript.log",
+        "checksums.json",
+    ] {
+        assert!(
+            artifacts_dir.join(required).exists(),
+            "missing required artifact {required}"
+        );
+    }
+
+    let replay_output = Command::new(env!("CARGO_BIN_EXE_ptybox"))
+        .args([
+            "replay",
+            "--json",
+            "--artifacts",
+            artifacts_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run replay");
+    assert!(
+        replay_output.status.success(),
+        "replay failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&replay_output.stdout),
+        String::from_utf8_lossy(&replay_output.stderr)
+    );
 }

@@ -1,85 +1,74 @@
-# API Documentation
-
-The ptybox library provides a Rust API for programmatic control.
+# API Reference
 
 ## Rustdoc
 
-Full API documentation is available at:
+Build local API docs:
 
-**[API Reference (rustdoc)](/ptybox/api/ptybox/)**
+```bash
+cargo doc --workspace --no-deps
+```
 
-## Quick Reference
+Then open `target/doc/ptybox/index.html`.
 
-### Running Commands
+## Primary Rust APIs
+
+### Run a single command
 
 ```rust
-use ptybox::run::{run_exec, run_scenario};
-use ptybox::model::{Policy, Scenario};
+use ptybox::model::Policy;
+use ptybox::run::run_exec;
 
-// Run a single command
+let policy = Policy::default();
 let result = run_exec(
     "/bin/echo".to_string(),
     vec!["hello".to_string()],
-    Some("/tmp".into()),
+    None,
     policy,
 )?;
+```
 
-// Run a scenario
+### Run a scenario
+
+```rust
+use ptybox::model::Scenario;
+use ptybox::run::run_scenario;
+
+let scenario: Scenario = serde_json::from_str(&std::fs::read_to_string("scenario.json")?)?;
 let result = run_scenario(scenario)?;
 ```
 
-### Session Control
+### Run driver loop programmatically
 
 ```rust
-use ptybox::session::{Session, SessionConfig};
-use ptybox::model::{Action, ActionType};
-use std::time::Duration;
+use ptybox::driver::{run_driver, DriverConfig};
+use ptybox::model::policy::PolicyBuilder;
 
-// Spawn a session
-let config = SessionConfig { /* ... */ };
-let mut session = Session::spawn(config)?;
-
-// Send input
-let action = Action {
-    action_type: ActionType::Text,
-    payload: serde_json::json!({"text": "hello"}),
+let cfg = DriverConfig {
+    command: "/bin/cat".to_string(),
+    args: Vec::new(),
+    cwd: None,
+    policy: PolicyBuilder::new()
+        .sandbox_disabled()
+        .allowed_read(vec!["/tmp".to_string()])
+        .allowed_executables(vec!["/bin/cat".to_string()])
+        .build(),
+    artifacts: None,
 };
-session.send(&action)?;
-
-// Observe output
-let observation = session.observe(Duration::from_secs(1))?;
-println!("Screen: {:?}", observation.screen.lines);
-
-// Terminate
-session.terminate()?;
+run_driver(cfg)?;
 ```
 
-### Policy Building
+## Common model types
 
-```rust
-use ptybox::model::PolicyBuilder;
+- `Policy`, `PolicyBuilder`
+- `Scenario`, `RunConfig`, `Step`, `Action`
+- `Observation`, `ScreenSnapshot`, `Event`
+- `RunResult`, `ErrorInfo`
+- `DriverRequestV2`, `DriverResponseV2`
 
-let policy = PolicyBuilder::new()
-    .sandbox_none()
-    .network_disabled()
-    .allowed_executable("/bin/echo")
-    .allowed_read("/tmp")
-    .build();
-```
+## Crates
 
-## Crate Structure
-
-| Crate | Description |
-|-------|-------------|
+| Crate | Purpose |
+|---|---|
 | `ptybox` | Core library |
-| `ptybox-cli` | CLI binary |
-| `ptybox-fixtures` | Test helpers (internal) |
-
-## Key Types
-
-- `Policy` - Security policy configuration
-- `Scenario` - Test scenario definition
-- `Session` - PTY session handle
-- `RunResult` - Execution result
-- `Observation` - Terminal state snapshot
-- `ScreenSnapshot` - Screen content with cursor
+| `ptybox-cli` | CLI frontend |
+| `ptybox-fixtures` | Test fixture binaries |

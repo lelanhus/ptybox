@@ -138,6 +138,6 @@ pub struct ErrorInfo {
 }
 
 /// Protocol version for JSON/NDJSON output format.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 /// Run result format version.
 pub const RUN_RESULT_VERSION: u32 = 1;

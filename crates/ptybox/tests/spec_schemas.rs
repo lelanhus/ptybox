@@ -140,6 +140,18 @@ fn observation_schema_is_valid_json() {
 }
 
 #[test]
+fn driver_request_schema_is_valid_json() {
+    let data = fs::read_to_string(schema_path("driver-request-v2.schema.json")).unwrap();
+    let _: serde_json::Value = serde_json::from_str(&data).unwrap();
+}
+
+#[test]
+fn driver_response_schema_is_valid_json() {
+    let data = fs::read_to_string(schema_path("driver-response-v2.schema.json")).unwrap();
+    let _: serde_json::Value = serde_json::from_str(&data).unwrap();
+}
+
+#[test]
 fn scenario_example_conforms_to_schema_subset() {
     let schema: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(schema_path("scenario.schema.json")).unwrap())
@@ -196,4 +208,32 @@ fn observation_schema_has_required_fields() {
     assert!(required_strings.contains(&"session_id"));
     assert!(required_strings.contains(&"timestamp_ms"));
     assert!(required_strings.contains(&"screen"));
+}
+
+#[test]
+fn driver_request_schema_has_required_fields() {
+    let schema: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(schema_path("driver-request-v2.schema.json")).unwrap(),
+    )
+    .unwrap();
+
+    let required = schema.get("required").and_then(|v| v.as_array()).unwrap();
+    let required_strings: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(required_strings.contains(&"protocol_version"));
+    assert!(required_strings.contains(&"request_id"));
+    assert!(required_strings.contains(&"action"));
+}
+
+#[test]
+fn driver_response_schema_has_required_fields() {
+    let schema: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(schema_path("driver-response-v2.schema.json")).unwrap(),
+    )
+    .unwrap();
+
+    let required = schema.get("required").and_then(|v| v.as_array()).unwrap();
+    let required_strings: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(required_strings.contains(&"protocol_version"));
+    assert!(required_strings.contains(&"request_id"));
+    assert!(required_strings.contains(&"status"));
 }

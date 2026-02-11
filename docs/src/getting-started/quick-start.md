@@ -1,22 +1,8 @@
 # Quick Start
 
-## Run a Simple Command
+## 1) Create a minimal policy
 
-The simplest way to use ptybox is with the `exec` command:
-
-```bash
-ptybox exec --json -- /bin/echo "Hello, TUI"
-```
-
-This runs `/bin/echo` in a PTY and returns structured JSON output including:
-- Exit status
-- Runtime duration
-- Final screen snapshot
-- Transcript
-
-## Using a Policy File
-
-For security, ptybox requires explicit policies. Create a minimal policy:
+`ptybox` is deny-by-default. Start with an explicit policy:
 
 ```json
 {
@@ -27,39 +13,71 @@ For security, ptybox requires explicit policies. Create a minimal policy:
   "network_unsafe_ack": true,
   "fs": {
     "allowed_read": ["/tmp"],
-    "allowed_write": [],
+    "allowed_write": ["/tmp/ptybox-artifacts"],
     "working_dir": "/tmp"
   },
+  "fs_write_unsafe_ack": true,
+  "fs_strict_write": false,
   "exec": {
-    "allowed_executables": ["/bin/echo"],
+    "allowed_executables": ["/bin/echo", "/bin/cat"],
     "allow_shell": false
+  },
+  "env": {
+    "allowlist": [],
+    "set": {},
+    "inherit": false
+  },
+  "budgets": {
+    "max_runtime_ms": 30000,
+    "max_steps": 100,
+    "max_output_bytes": 8388608,
+    "max_snapshot_bytes": 2097152,
+    "max_wait_ms": 10000
+  },
+  "artifacts": {
+    "enabled": false,
+    "dir": null,
+    "overwrite": false
+  },
+  "replay": {
+    "strict": false,
+    "normalization_filters": null,
+    "normalization_rules": null
   }
 }
 ```
 
-Save this as `policy.json` and run:
+Save as `policy.json`.
+
+## 2) Run a command
 
 ```bash
-ptybox exec --json --policy policy.json -- /bin/echo "Secured!"
+ptybox exec --json --policy ./policy.json -- /bin/echo "Hello, ptybox"
 ```
 
-## Interactive Driver Mode
-
-For agent-style interaction, use driver mode:
+## 3) Start interactive driver mode
 
 ```bash
-ptybox driver --stdio --json -- /bin/cat
+ptybox driver --stdio --json --policy ./policy.json -- /bin/cat
 ```
 
-Then send NDJSON commands via stdin:
+Send NDJSON requests:
 
 ```json
-{"protocol_version":1,"action":{"type":"text","payload":{"text":"hello"}}}
-{"protocol_version":1,"action":{"type":"terminate","payload":{}}}
+{"protocol_version":2,"request_id":"req-1","action":{"type":"text","payload":{"text":"hello"}}}
+{"protocol_version":2,"request_id":"req-2","action":{"type":"terminate","payload":{}}}
 ```
 
-## Next Steps
+## 4) Save artifacts for replay
 
-- [Your First Scenario](first-scenario.md) - Create a complete test scenario
-- [Policies](../guides/policies.md) - Learn about security policies
-- [CLI Commands](../reference/cli.md) - Full CLI reference
+```bash
+ptybox exec --json --policy ./policy.json --artifacts /tmp/ptybox-artifacts --overwrite -- /bin/echo done
+ptybox replay --json --artifacts /tmp/ptybox-artifacts
+```
+
+## Next
+
+- [Your First Scenario](first-scenario.md)
+- [Scenario Guide](../guides/scenarios.md)
+- [AI Agents](../guides/ai-agents.md)
+- [Protocol Reference](../reference/protocol.md)

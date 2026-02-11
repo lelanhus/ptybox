@@ -20,7 +20,7 @@ use ptybox::runner::{
     load_scenario, run_exec_with_options, run_scenario, RunnerError, RunnerOptions,
 };
 use ptybox::scenario::load_policy_file;
-use std::io::{self, BufRead, Write};
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -156,6 +156,31 @@ enum Commands {
         stdio: bool,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        #[arg(long, help = "Override the policy working directory (absolute path)")]
+        cwd: Option<String>,
+        #[arg(
+            long,
+            help = "Write artifacts to this directory (requires allowlisted write access)"
+        )]
+        artifacts: Option<PathBuf>,
+        #[arg(long, help = "Overwrite existing artifacts directory")]
+        overwrite: bool,
+        #[arg(
+            long,
+            help = "Disable sandboxing (unsafe without --ack-unsafe-sandbox)"
+        )]
+        no_sandbox: bool,
+        #[arg(long, help = "Acknowledge unsafe sandbox disablement")]
+        ack_unsafe_sandbox: bool,
+        #[arg(
+            long,
+            help = "Enable network access (unsafe without --ack-unsafe-network)"
+        )]
+        enable_network: bool,
+        #[arg(long, help = "Acknowledge unsafe network access")]
+        ack_unsafe_network: bool,
         #[arg(
             long,
             help = "Require explicit write acknowledgement for any write access"
@@ -234,6 +259,7 @@ fn configure_colors(mode: ColorMode) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let cli = Cli::parse();
     configure_colors(cli.color);
@@ -299,10 +325,32 @@ fn main() -> Result<()> {
         Commands::Driver {
             stdio,
             json,
+            policy,
+            cwd,
+            artifacts,
+            overwrite,
+            no_sandbox,
+            ack_unsafe_sandbox,
+            enable_network,
+            ack_unsafe_network,
             strict_write,
             ack_unsafe_write,
             command,
-        } => cmd_driver(stdio, json, strict_write, ack_unsafe_write, command),
+        } => cmd_driver(
+            stdio,
+            json,
+            policy,
+            cwd,
+            artifacts,
+            overwrite,
+            no_sandbox,
+            ack_unsafe_sandbox,
+            enable_network,
+            ack_unsafe_network,
+            strict_write,
+            ack_unsafe_write,
+            command,
+        ),
         Commands::ProtocolHelp { json } => cmd_protocol_help(json),
         Commands::Replay {
             json,
@@ -458,9 +506,18 @@ fn cmd_run(
 }
 
 /// Handle the driver command.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn cmd_driver(
     stdio: bool,
     json: bool,
+    policy_path: Option<PathBuf>,
+    cwd: Option<String>,
+    artifacts: Option<PathBuf>,
+    overwrite: bool,
+    no_sandbox: bool,
+    ack_unsafe_sandbox: bool,
+    enable_network: bool,
+    ack_unsafe_network: bool,
     strict_write: bool,
     ack_unsafe_write: bool,
     command: Vec<String>,
@@ -469,17 +526,37 @@ fn cmd_driver(
         return emit_cli_error(json, "driver requires --stdio --json");
     }
     let (cmd, args) = split_command(command)?;
-    let mut policy = Policy::default();
+    let mut policy = match policy_path {
+        Some(path) => load_policy_file(&path)?,
+        None => Policy::default(),
+    };
     apply_cli_policy_overrides(
         &mut policy,
-        true,
-        true,
-        false,
-        true,
+        no_sandbox,
+        ack_unsafe_sandbox,
+        enable_network,
+        ack_unsafe_network,
         ack_unsafe_write,
         strict_write,
     );
-    run_driver(cmd, args, policy)
+    if let Some(dir) = cwd.as_ref() {
+        if !std::path::Path::new(dir).is_absolute() {
+            return emit_cli_error(json, "--cwd must be an absolute path");
+        }
+    }
+
+    let config = ptybox::driver::DriverConfig {
+        command: cmd,
+        args,
+        cwd,
+        policy,
+        artifacts: artifacts.map(|dir| ArtifactsWriterConfig { dir, overwrite }),
+    };
+
+    match ptybox::driver::run_driver(config) {
+        Ok(()) => Ok(()),
+        Err(err) => std::process::exit(exit_code_for_error(&err)),
+    }
 }
 
 /// Handle the protocol-help command.
@@ -628,85 +705,6 @@ fn split_command(mut command: Vec<String>) -> Result<(String, Vec<String>), Runn
     Ok((cmd, command))
 }
 
-fn run_driver(command: String, args: Vec<String>, policy: Policy) -> Result<()> {
-    use ptybox::model::{Action, ActionType, RunId, PROTOCOL_VERSION};
-    use ptybox::policy::validate_policy;
-    use ptybox::session::{Session, SessionConfig};
-    #[derive(serde::Deserialize)]
-    struct DriverInput {
-        protocol_version: u32,
-        action: Action,
-    }
-    let run_id = RunId::new();
-    validate_policy(&policy)?;
-    let mut session = Session::spawn(SessionConfig {
-        command,
-        args,
-        cwd: None,
-        size: ptybox::model::TerminalSize::default(),
-        run_id,
-        env: policy.env,
-    })?;
-
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
-    for line in stdin.lock().lines() {
-        let line = line.into_diagnostic()?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let input: DriverInput = match serde_json::from_str(&line) {
-            Ok(value) => value,
-            Err(e) => {
-                let context = serde_json::json!({
-                    "parse_error": e.to_string(),
-                    "received": line.chars().take(200).collect::<String>(),
-                    "expected_schema": {
-                        "protocol_version": "number (must be 1)",
-                        "action": {
-                            "type": "key | text | resize | wait | terminate",
-                            "payload": "object (varies by action type)"
-                        }
-                    },
-                    "example": {
-                        "protocol_version": 1,
-                        "action": {
-                            "type": "text",
-                            "payload": {"text": "hello"}
-                        }
-                    },
-                    "hint": "Run 'ptybox protocol-help --json' for full schema documentation"
-                });
-                emit_driver_error("E_PROTOCOL", "invalid json action", Some(context))?;
-                std::process::exit(exit_code_for_error_code("E_PROTOCOL"));
-            }
-        };
-        if input.protocol_version != PROTOCOL_VERSION {
-            emit_driver_error(
-                "E_PROTOCOL_VERSION_MISMATCH",
-                "unsupported protocol version; update the client to the supported version",
-                Some(serde_json::json!({
-                    "provided_version": input.protocol_version,
-                    "supported_version": PROTOCOL_VERSION
-                })),
-            )?;
-            std::process::exit(exit_code_for_error_code("E_PROTOCOL_VERSION_MISMATCH"));
-        }
-        let action = input.action;
-        session.send(&action)?;
-        let observation = session.observe(std::time::Duration::from_millis(50))?;
-        let payload = serde_json::to_string(&observation).into_diagnostic()?;
-        writeln!(stdout, "{payload}").into_diagnostic()?;
-        stdout.flush().into_diagnostic()?;
-
-        if matches!(action.action_type, ActionType::Terminate) {
-            break;
-        }
-    }
-
-    Ok(())
-}
-
 #[derive(Copy, Clone, Debug, ValueEnum)]
 #[value(rename_all = "snake_case")]
 enum NormalizeFilterArg {
@@ -800,19 +798,6 @@ fn emit_explanation(json: bool, explanation: &ptybox::policy::PolicyExplanation)
             println!(" - {}: {}", err.code, err.message);
         }
     }
-    Ok(())
-}
-
-fn emit_driver_error(code: &str, message: &str, context: Option<serde_json::Value>) -> Result<()> {
-    use ptybox::model::PROTOCOL_VERSION;
-    let error_response = serde_json::json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "code": code,
-        "message": message,
-        "context": context,
-    });
-    let payload = serde_json::to_string(&error_response).into_diagnostic()?;
-    println!("{payload}");
     Ok(())
 }
 
