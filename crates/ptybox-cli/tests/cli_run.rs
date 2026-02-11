@@ -448,6 +448,67 @@ fn run_scenario_supports_wait_action() {
 }
 
 #[test]
+fn run_scenario_handles_split_utf8_output_without_terminal_parse() {
+    let dir = temp_dir("scenario-split-utf8");
+    let mut policy = base_policy(&dir, vec!["/bin/sh".to_string()]);
+    policy.exec.allow_shell = true;
+
+    let scenario = Scenario {
+        scenario_version: 1,
+        metadata: ScenarioMetadata {
+            name: "split-utf8".to_string(),
+            description: None,
+        },
+        run: ptybox::model::RunConfig {
+            command: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "printf '\\360'; sleep 0.1; printf '\\237\\230\\200\\n'".to_string(),
+            ],
+            cwd: Some(dir.display().to_string()),
+            initial_size: TerminalSize::default(),
+            policy: ptybox::model::scenario::PolicyRef::Inline(Box::new(policy)),
+        },
+        steps: vec![Step {
+            id: StepId::new(),
+            name: "wait-for-exit".to_string(),
+            action: Action {
+                action_type: ActionType::Wait,
+                payload: serde_json::json!({"condition": {"type": "process_exited"}}),
+            },
+            assert: vec![Assertion {
+                assertion_type: "screen_contains".to_string(),
+                payload: serde_json::json!({"text": "😀"}),
+            }],
+            timeout_ms: 2000,
+            retries: 0,
+        }],
+    };
+
+    let scenario_path = dir.join("scenario.json");
+    write_scenario(&scenario_path, &scenario);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ptybox"))
+        .args([
+            "run",
+            "--json",
+            "--scenario",
+            scenario_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "split UTF-8 scenario should pass: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run: RunResult = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(matches!(run.status, ptybox::model::RunStatus::Passed));
+}
+
+#[test]
 fn run_scenario_retries_failed_steps() {
     let dir = temp_dir("scenario-retries");
     let fixture = "/bin/cat".to_string();

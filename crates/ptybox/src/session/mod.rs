@@ -164,6 +164,7 @@ pub struct Session {
     reader: Box<dyn Read + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     started_at: Instant,
+    pending_utf8_tail: Vec<u8>,
 }
 
 /// Configuration for spawning a session.
@@ -246,6 +247,7 @@ impl Session {
             reader,
             child,
             started_at: Instant::now(),
+            pending_utf8_tail: Vec::new(),
         })
     }
 
@@ -373,11 +375,15 @@ impl Session {
     /// - `E_TERMINAL_PARSE`: Output was not valid UTF-8
     pub fn observe(&mut self, timeout: Duration) -> Result<Observation, RunnerError> {
         let mut total = Vec::new();
+        let mut saw_eof = false;
         let deadline = Instant::now() + timeout;
         loop {
             let mut read_buffer = vec![0u8; 4096];
             match self.reader.read(&mut read_buffer) {
-                Ok(0) => break,
+                Ok(0) => {
+                    saw_eof = true;
+                    break;
+                }
                 Ok(count) => {
                     read_buffer.truncate(count);
                     total.extend_from_slice(&read_buffer);
@@ -395,21 +401,7 @@ impl Session {
             }
         }
 
-        let transcript_delta = if total.is_empty() {
-            None
-        } else {
-            match std::str::from_utf8(&total) {
-                Ok(value) => Some(value.to_string()),
-                Err(err) => {
-                    return Err(RunnerError::terminal_parse(
-                        "E_TERMINAL_PARSE",
-                        "terminal output was not valid UTF-8",
-                        err,
-                        Some(err.valid_up_to()),
-                    ));
-                }
-            }
-        };
+        let transcript_delta = self.decode_transcript_delta(&total, saw_eof)?;
 
         let mut terminal = self.terminal.lock().map_err(|_| {
             RunnerError::internal("E_INTERNAL", "terminal lock poisoned during observation")
@@ -427,6 +419,73 @@ impl Session {
             transcript_delta,
             events: Vec::new(),
         })
+    }
+
+    fn decode_transcript_delta(
+        &mut self,
+        total: &[u8],
+        saw_eof: bool,
+    ) -> Result<Option<String>, RunnerError> {
+        if total.is_empty() && self.pending_utf8_tail.is_empty() {
+            return Ok(None);
+        }
+
+        let mut combined = Vec::with_capacity(self.pending_utf8_tail.len() + total.len());
+        combined.extend_from_slice(&self.pending_utf8_tail);
+        combined.extend_from_slice(total);
+
+        match std::str::from_utf8(&combined) {
+            Ok(value) => {
+                self.pending_utf8_tail.clear();
+                if value.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(value.to_string()))
+                }
+            }
+            Err(err) => {
+                if err.error_len().is_none() {
+                    let valid_up_to = err.valid_up_to();
+                    if saw_eof {
+                        return Err(RunnerError::terminal_parse(
+                            "E_TERMINAL_PARSE",
+                            "terminal output was not valid UTF-8",
+                            err,
+                            Some(valid_up_to),
+                        ));
+                    }
+
+                    let prefix = if valid_up_to == 0 {
+                        None
+                    } else {
+                        let valid_prefix = combined.get(..valid_up_to).ok_or_else(|| {
+                            RunnerError::internal("E_INTERNAL", "utf-8 prefix index out of bounds")
+                        })?;
+                        let value = std::str::from_utf8(valid_prefix).map_err(|_| {
+                            RunnerError::internal(
+                                "E_INTERNAL",
+                                "utf-8 prefix validation failed unexpectedly",
+                            )
+                        })?;
+                        Some(value.to_string())
+                    };
+
+                    let pending_tail = combined.get(valid_up_to..).ok_or_else(|| {
+                        RunnerError::internal("E_INTERNAL", "utf-8 tail index out of bounds")
+                    })?;
+                    self.pending_utf8_tail.clear();
+                    self.pending_utf8_tail.extend_from_slice(pending_tail);
+                    Ok(prefix)
+                } else {
+                    Err(RunnerError::terminal_parse(
+                        "E_TERMINAL_PARSE",
+                        "terminal output was not valid UTF-8",
+                        err,
+                        Some(err.valid_up_to()),
+                    ))
+                }
+            }
+        }
     }
 
     /// Wait for the child process to exit.

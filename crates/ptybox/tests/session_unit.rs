@@ -359,6 +359,102 @@ fn session_observe_timeout_returns_partial() {
     );
 }
 
+#[test]
+fn session_observe_handles_split_utf8_across_observations() {
+    let config = SessionConfig {
+        command: "/bin/sh".to_string(),
+        args: vec![
+            "-c".to_string(),
+            "printf '\\360'; sleep 0.1; printf '\\237\\230\\200\\n'".to_string(),
+        ],
+        cwd: None,
+        size: TerminalSize::default(),
+        run_id: RunId::new(),
+        env: Default::default(),
+    };
+    let mut session = Session::spawn(config).expect("Failed to spawn");
+
+    let first = session.observe(Duration::from_millis(50));
+    assert!(
+        first.is_ok(),
+        "Split UTF-8 prefix should not fail parsing: {:?}",
+        first.err()
+    );
+
+    let mut combined_transcript = String::new();
+    if let Some(first_delta) = first.unwrap().transcript_delta {
+        combined_transcript.push_str(&first_delta);
+    }
+
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(2);
+    let mut saw_emoji = false;
+    while start.elapsed() < timeout {
+        let observation = session
+            .observe(Duration::from_millis(100))
+            .expect("Observation after split UTF-8 should succeed");
+        if let Some(delta) = observation.transcript_delta {
+            combined_transcript.push_str(&delta);
+        }
+        if combined_transcript.contains('😀') {
+            saw_emoji = true;
+            break;
+        }
+
+        if session
+            .wait_for_exit(Duration::from_millis(0))
+            .expect("wait_for_exit should succeed")
+            .is_some()
+        {
+            break;
+        }
+    }
+
+    assert!(
+        saw_emoji,
+        "Expected completed emoji in transcript after split UTF-8 sequence, got: {combined_transcript}"
+    );
+}
+
+#[test]
+fn session_observe_reports_terminal_parse_for_truncated_utf8_at_eof() {
+    let config = SessionConfig {
+        command: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), "printf '\\360'".to_string()],
+        cwd: None,
+        size: TerminalSize::default(),
+        run_id: RunId::new(),
+        env: Default::default(),
+    };
+    let mut session = Session::spawn(config).expect("Failed to spawn");
+
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(2);
+    let mut last_error = None;
+    while start.elapsed() < timeout {
+        match session.observe(Duration::from_millis(100)) {
+            Ok(_) => {
+                if session
+                    .wait_for_exit(Duration::from_millis(0))
+                    .expect("wait_for_exit should succeed")
+                    .is_some()
+                {
+                    // One more read after EOF to surface parse error.
+                    last_error = session.observe(Duration::from_millis(50)).err();
+                    break;
+                }
+            }
+            Err(err) => {
+                last_error = Some(err);
+                break;
+            }
+        }
+    }
+
+    let err = last_error.expect("Expected terminal parse error for truncated UTF-8 at EOF");
+    assert_eq!(err.code, ErrorCode::TerminalParse);
+}
+
 // =============================================================================
 // Terminate Tests
 // =============================================================================
