@@ -6,6 +6,9 @@ This project aims to follow “Keep a Changelog” style entries and Semantic Ve
 
 ## [Unreleased]
 
+### Fixed
+- Replay mismatch caused by non-deterministic `pty_output`/`pty_eof` events: added `Events` normalization filter to strip observation `events` arrays during comparison.
+
 ### Added
 - Driver protocol v2 envelopes: `DriverRequestV2` and `DriverResponseV2` with `request_id` correlation and per-action metrics.
 - New `ptybox::driver` library module with typed `DriverConfig` and reusable `run_driver()` engine.

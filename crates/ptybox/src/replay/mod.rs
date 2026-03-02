@@ -374,6 +374,7 @@ fn default_replay_filters() -> Vec<NormalizationFilter> {
         NormalizationFilter::StepTimestamps,
         NormalizationFilter::ObservationTimestamp,
         NormalizationFilter::SessionId,
+        NormalizationFilter::Events,
     ]
 }
 
@@ -844,6 +845,7 @@ fn normalize_observation_value(
         NormalizationFilter::ObservationTimestamp,
         &["timestamp_ms"],
     );
+    remove_if_filtered(obj, filters, NormalizationFilter::Events, &["events"]);
 
     // Screen normalization
     if let Some(screen) = obj.get_mut("screen").and_then(|val| val.as_object_mut()) {

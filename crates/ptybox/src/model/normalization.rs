@@ -22,6 +22,8 @@ pub enum NormalizationFilter {
     ObservationTimestamp,
     /// Ignore session IDs.
     SessionId,
+    /// Ignore observation `events` arrays.
+    Events,
 }
 
 /// Target for regex-based normalization rules.

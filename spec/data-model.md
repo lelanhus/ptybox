@@ -354,6 +354,7 @@ Canonical filters (snake_case):
 - `step_timestamps` (ignore step `started_at_ms`/`ended_at_ms`)
 - `observation_timestamp` (ignore observation `timestamp_ms`)
 - `session_id` (ignore observation `session_id`)
+- `events` (ignore observation `events` arrays)
 
 ### NormalizationRule
 - `target: "transcript" | "snapshot_lines"`

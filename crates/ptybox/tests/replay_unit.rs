@@ -265,11 +265,11 @@ fn filter_precedence_default_when_empty() {
     assert!(!result.filters.is_empty(), "Should have default filters");
 
     // Verify the EXACT set of default filters (as defined in default_replay_filters())
-    // Default filters should be exactly these 6 filters:
+    // Default filters should be exactly these 7 filters:
     assert_eq!(
         result.filters.len(),
-        6,
-        "Should have exactly 6 default filters"
+        7,
+        "Should have exactly 7 default filters"
     );
 
     // Verify each specific default filter is present
@@ -300,6 +300,10 @@ fn filter_precedence_default_when_empty() {
     assert!(
         result.filters.contains(&NormalizationFilter::SessionId),
         "Default filters should include SessionId"
+    );
+    assert!(
+        result.filters.contains(&NormalizationFilter::Events),
+        "Default filters should include Events"
     );
 
     cleanup_dir(&dir);
