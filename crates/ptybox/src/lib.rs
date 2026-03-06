@@ -17,6 +17,7 @@
 //! | [`policy`] | Deny-by-default policy validation, sandbox profile generation |
 //! | [`runner`] | Step execution engine, wait conditions, budget enforcement |
 //! | [`driver`] | Interactive NDJSON protocol v2 for agent loops |
+//! | [`serve`] | Stateless session daemon for agent-friendly CLI |
 //! | [`artifacts`] | Transcript, snapshots, checksums, run summary to disk |
 //! | [`replay`] | Replay comparison with normalization filters |
 //! | [`scenario`] | Scenario/policy file parsing (JSON/YAML) |
@@ -67,6 +68,8 @@
 // Legacy error constructors are deprecated but still widely used across modules.
 // Allow deprecated usage during migration to the new ErrorCode-based constructors.
 #[allow(deprecated)]
+pub(crate) mod actions;
+#[allow(deprecated)]
 pub mod artifacts;
 pub mod assertions;
 #[allow(deprecated)]
@@ -85,6 +88,14 @@ pub mod session;
 pub mod terminal;
 #[allow(deprecated)]
 pub mod util;
+
+/// Stateless session server for agent-friendly CLI automation.
+///
+/// The serve module implements a background daemon that holds a PTY session
+/// and accepts commands over a Unix domain socket. Each client connection
+/// sends one request, receives one response, and disconnects.
+#[allow(deprecated)]
+pub mod serve;
 
 pub use crate::model::*;
 

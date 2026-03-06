@@ -105,6 +105,13 @@ Session::wait_for_exit(timeout: Duration) -> Result<Option<ExitStatus>, RunnerEr
 | `replay` | Compare run against baseline | `--baseline`, `--normalize` |
 | `replay-report` | Generate HTML diff report | `--baseline`, `--output` |
 | `driver` | Interactive NDJSON protocol | `--policy` |
+| `open` | Start stateless session (agent-friendly) | `--policy`, `--json`, `--idle-timeout` |
+| `keys` | Send keys to session | `<session_id> <keys>`, `--json` |
+| `type` | Type text into session | `<session_id> <text>`, `--json` |
+| `wait` | Wait for screen condition | `<session_id>`, `--contains`, `--matches` |
+| `screen` | Print current screen | `<session_id>`, `--json` |
+| `close` | Terminate session | `<session_id>`, `--json` |
+| `sessions` | List active sessions | `--json` |
 | `protocol-help` | Show protocol documentation | (none) |
 | `trace` | Generate HTML trace viewer | `--output`, `--open` |
 | `completions` | Generate shell completions | `--shell bash\|zsh\|fish` |

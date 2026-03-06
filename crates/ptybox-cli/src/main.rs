@@ -20,7 +20,7 @@ use ptybox::runner::{
     load_scenario, run_exec_with_options, run_scenario, RunnerError, RunnerOptions,
 };
 use ptybox::scenario::load_policy_file;
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -213,10 +213,125 @@ enum Commands {
         )]
         output: Option<PathBuf>,
     },
+
+    // =========================================================================
+    // Stateless session commands (agent-friendly)
+    // =========================================================================
+    /// Open a new session: spawn command, print session ID + screen
+    Open {
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        #[arg(long, help = "Override the policy working directory (absolute path)")]
+        cwd: Option<String>,
+        #[arg(long, help = "Idle timeout in seconds (default: 1800)")]
+        idle_timeout: Option<u64>,
+        #[arg(
+            long,
+            help = "Disable sandboxing (unsafe without --ack-unsafe-sandbox)"
+        )]
+        no_sandbox: bool,
+        #[arg(long, help = "Acknowledge unsafe sandbox disablement")]
+        ack_unsafe_sandbox: bool,
+        #[arg(
+            long,
+            help = "Enable network access (unsafe without --ack-unsafe-network)"
+        )]
+        enable_network: bool,
+        #[arg(long, help = "Acknowledge unsafe network access")]
+        ack_unsafe_network: bool,
+        #[arg(long, help = "Acknowledge unsafe write access")]
+        ack_unsafe_write: bool,
+        #[arg(
+            long,
+            help = "Require explicit write acknowledgement for any write access"
+        )]
+        strict_write: bool,
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Send keys to a session and print the screen
+    Keys {
+        /// Session ID
+        session_id: String,
+        /// Keys to send (e.g. "dd", "Enter", "iHello")
+        keys: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Type text into a session and print the screen
+    Type {
+        /// Session ID
+        session_id: String,
+        /// Text to type
+        text: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait for a condition and print the screen
+    Wait {
+        /// Session ID
+        session_id: String,
+        #[arg(long, help = "Wait until screen contains this text")]
+        contains: Option<String>,
+        #[arg(long, help = "Wait until screen matches this regex")]
+        matches: Option<String>,
+        #[arg(long, help = "Wait timeout in milliseconds (default: 5000)")]
+        timeout: Option<u64>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the current screen of a session
+    Screen {
+        /// Session ID
+        session_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close a session and terminate its process
+    Close {
+        /// Session ID
+        session_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List active sessions
+    Sessions {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Internal: run the serve daemon (not user-facing)
+    #[command(hide = true)]
+    Serve {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        #[arg(long)]
+        cwd: Option<String>,
+        #[arg(long)]
+        idle_timeout: Option<u64>,
+        #[arg(long)]
+        no_sandbox: bool,
+        #[arg(long)]
+        ack_unsafe_sandbox: bool,
+        #[arg(long)]
+        enable_network: bool,
+        #[arg(long)]
+        ack_unsafe_network: bool,
+        #[arg(long)]
+        ack_unsafe_write: bool,
+        #[arg(long)]
+        strict_write: bool,
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
 }
 
 mod progress;
 mod protocol_help;
+mod session_client;
 mod trace;
 mod tui_mode;
 
@@ -391,6 +506,76 @@ fn main() -> Result<()> {
         Commands::ReplayReport { json, artifacts } => cmd_replay_report(json, artifacts),
         Commands::Completions { shell } => cmd_completions(shell),
         Commands::Trace { artifacts, output } => cmd_trace(artifacts, output),
+        Commands::Open {
+            json,
+            policy,
+            cwd,
+            idle_timeout,
+            no_sandbox,
+            ack_unsafe_sandbox,
+            enable_network,
+            ack_unsafe_network,
+            ack_unsafe_write,
+            strict_write,
+            command,
+        } => cmd_open(
+            json,
+            policy,
+            cwd,
+            idle_timeout,
+            no_sandbox,
+            ack_unsafe_sandbox,
+            enable_network,
+            ack_unsafe_network,
+            ack_unsafe_write,
+            strict_write,
+            command,
+        ),
+        Commands::Keys {
+            session_id,
+            keys,
+            json,
+        } => cmd_keys(session_id, keys, json),
+        Commands::Type {
+            session_id,
+            text,
+            json,
+        } => cmd_type(session_id, text, json),
+        Commands::Wait {
+            session_id,
+            contains,
+            matches,
+            timeout,
+            json,
+        } => cmd_wait(session_id, contains, matches, timeout, json),
+        Commands::Screen { session_id, json } => cmd_screen(session_id, json),
+        Commands::Close { session_id, json } => cmd_close(session_id, json),
+        Commands::Sessions { json } => cmd_sessions(json),
+        Commands::Serve {
+            session_id,
+            policy,
+            cwd,
+            idle_timeout,
+            no_sandbox,
+            ack_unsafe_sandbox,
+            enable_network,
+            ack_unsafe_network,
+            ack_unsafe_write,
+            strict_write,
+            command,
+        } => cmd_serve(
+            session_id,
+            policy,
+            cwd,
+            idle_timeout,
+            no_sandbox,
+            ack_unsafe_sandbox,
+            enable_network,
+            ack_unsafe_network,
+            ack_unsafe_write,
+            strict_write,
+            command,
+        ),
     }
 }
 
@@ -833,6 +1018,390 @@ fn emit_cli_error(json: bool, message: &str) -> Result<()> {
 
 fn exit_code_for_error(err: &RunnerError) -> i32 {
     err.exit_code()
+}
+
+// =============================================================================
+// Session Command Handlers
+// =============================================================================
+
+/// Generate an 8-char hex session ID from /dev/urandom.
+fn generate_session_id() -> String {
+    use std::io::Read;
+    let mut buf = [0u8; 4];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut buf);
+    } else {
+        // Fallback: use process ID + time as entropy
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        buf = [
+            (t & 0xFF) as u8,
+            ((t >> 8) & 0xFF) as u8,
+            ((t >> 16) & 0xFF) as u8,
+            ((t >> 24) & 0xFF) as u8,
+        ];
+    }
+    format!("{:02x}{:02x}{:02x}{:02x}", buf[0], buf[1], buf[2], buf[3])
+}
+
+/// Build CLI arguments for the _serve subprocess.
+struct ServeArgsBuilder {
+    args: Vec<String>,
+}
+
+impl ServeArgsBuilder {
+    fn new(session_id: &str) -> Self {
+        Self {
+            args: vec![
+                "serve".to_string(),
+                "--session-id".to_string(),
+                session_id.to_string(),
+            ],
+        }
+    }
+
+    fn flag_if(&mut self, flag: &str, enabled: bool) {
+        if enabled {
+            self.args.push(flag.to_string());
+        }
+    }
+
+    fn opt(&mut self, name: &str, value: &str) {
+        self.args.push(name.to_string());
+        self.args.push(value.to_string());
+    }
+
+    fn finish(mut self, command: Vec<String>) -> Vec<String> {
+        self.args.push("--".to_string());
+        self.args.extend(command);
+        self.args
+    }
+}
+
+/// Handle the open command: spawn a _serve daemon and print the initial screen.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+fn cmd_open(
+    json: bool,
+    policy: Option<PathBuf>,
+    cwd: Option<String>,
+    idle_timeout: Option<u64>,
+    no_sandbox: bool,
+    ack_unsafe_sandbox: bool,
+    enable_network: bool,
+    ack_unsafe_network: bool,
+    ack_unsafe_write: bool,
+    strict_write: bool,
+    command: Vec<String>,
+) -> Result<()> {
+    use std::io::BufRead;
+
+    let session_id = generate_session_id();
+
+    let mut builder = ServeArgsBuilder::new(&session_id);
+    if let Some(ref p) = policy {
+        builder.opt("--policy", &p.display().to_string());
+    }
+    if let Some(ref c) = cwd {
+        builder.opt("--cwd", c);
+    }
+    if let Some(t) = idle_timeout {
+        builder.opt("--idle-timeout", &t.to_string());
+    }
+    builder.flag_if("--no-sandbox", no_sandbox);
+    builder.flag_if("--ack-unsafe-sandbox", ack_unsafe_sandbox);
+    builder.flag_if("--enable-network", enable_network);
+    builder.flag_if("--ack-unsafe-network", ack_unsafe_network);
+    builder.flag_if("--ack-unsafe-write", ack_unsafe_write);
+    builder.flag_if("--strict-write", strict_write);
+    let serve_args = builder.finish(command);
+
+    // Spawn the daemon with stdout piped so we can read the ready message
+    let current_exe = std::env::current_exe().into_diagnostic()?;
+    let mut child = std::process::Command::new(current_exe)
+        .args(&serve_args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .into_diagnostic()?;
+
+    // Read the ready message from the child's stdout
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| miette::miette!("failed to capture daemon stdout"))?;
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut line = String::new();
+    reader.read_line(&mut line).into_diagnostic()?;
+
+    if line.trim().is_empty() {
+        let status = child.wait().into_diagnostic()?;
+        eprintln!("daemon exited immediately with status: {status}");
+        std::process::exit(1);
+    }
+
+    // Parse and validate the ready message
+    let ready: serde_json::Value = serde_json::from_str(line.trim()).into_diagnostic()?;
+    if !ready.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let err_msg = ready
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        eprintln!("error: {err_msg}");
+        std::process::exit(1);
+    }
+
+    print_open_output(json, &session_id, &ready, line.trim());
+    Ok(())
+}
+
+/// Print the output of the `open` command.
+fn print_open_output(json: bool, session_id: &str, ready: &serde_json::Value, raw_line: &str) {
+    if json {
+        println!("{raw_line}");
+        return;
+    }
+    println!("{session_id}");
+    if let Some(screen) = ready.get("screen") {
+        if let Some(lines) = screen.get("lines").and_then(|v| v.as_array()) {
+            let text_lines: Vec<&str> = lines.iter().filter_map(|l| l.as_str()).collect();
+            let mut trimmed = text_lines;
+            while trimmed.last().is_some_and(|l| l.trim().is_empty()) {
+                trimmed.pop();
+            }
+            for l in trimmed {
+                println!("{l}");
+            }
+        }
+    }
+}
+
+/// Handle the keys command.
+fn cmd_keys(session_id: String, keys: String, json: bool) -> Result<()> {
+    use ptybox::serve::protocol::{ServeCommand, ServeRequest};
+    let request = ServeRequest {
+        command: ServeCommand::Keys { keys },
+    };
+    handle_session_response(&session_id, &request, json)
+}
+
+/// Handle the type command.
+fn cmd_type(session_id: String, text: String, json: bool) -> Result<()> {
+    use ptybox::serve::protocol::{ServeCommand, ServeRequest};
+    let request = ServeRequest {
+        command: ServeCommand::Text { text },
+    };
+    handle_session_response(&session_id, &request, json)
+}
+
+/// Handle the wait command.
+fn cmd_wait(
+    session_id: String,
+    contains: Option<String>,
+    matches: Option<String>,
+    timeout: Option<u64>,
+    json: bool,
+) -> Result<()> {
+    use ptybox::serve::protocol::{ServeCommand, ServeRequest};
+    if contains.is_none() && matches.is_none() {
+        return emit_cli_error(json, "wait requires --contains or --matches");
+    }
+    let request = ServeRequest {
+        command: ServeCommand::Wait {
+            contains,
+            matches,
+            timeout_ms: timeout,
+        },
+    };
+    handle_session_response(&session_id, &request, json)
+}
+
+/// Handle the screen command.
+fn cmd_screen(session_id: String, json: bool) -> Result<()> {
+    use ptybox::serve::protocol::{ServeCommand, ServeRequest};
+    let request = ServeRequest {
+        command: ServeCommand::Screen,
+    };
+    handle_session_response(&session_id, &request, json)
+}
+
+/// Handle the close command.
+fn cmd_close(session_id: String, json: bool) -> Result<()> {
+    use ptybox::serve::protocol::{ServeCommand, ServeRequest};
+    let request = ServeRequest {
+        command: ServeCommand::Close,
+    };
+    let resp = session_client::send_request(&session_id, &request);
+    match resp {
+        Ok(r) if r.ok => {
+            if json {
+                emit_json(&r)?;
+            } else {
+                eprintln!("session {session_id} closed");
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            let msg = r.error.as_deref().unwrap_or("unknown error");
+            if json {
+                emit_json(&r)?;
+            } else {
+                eprintln!("error: {msg}");
+            }
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Handle the sessions command.
+fn cmd_sessions(json: bool) -> Result<()> {
+    let dir = session_client::socket_dir();
+    if !dir.exists() {
+        if json {
+            println!("[]");
+        }
+        return Ok(());
+    }
+
+    let mut sessions = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(id) = session_client::session_id_from_path(&path) {
+                let alive = session_client::is_session_alive(&id);
+                sessions.push((id, alive));
+            }
+        }
+    }
+
+    if json {
+        let items: Vec<serde_json::Value> = sessions
+            .iter()
+            .map(|(id, alive)| {
+                serde_json::json!({
+                    "session_id": id,
+                    "alive": alive,
+                })
+            })
+            .collect();
+        let payload = serde_json::to_string(&items).into_diagnostic()?;
+        println!("{payload}");
+    } else {
+        if sessions.is_empty() {
+            eprintln!("no active sessions");
+            return Ok(());
+        }
+        for (id, alive) in &sessions {
+            let status = if *alive { "alive" } else { "stale" };
+            println!("{id}  {status}");
+        }
+    }
+    Ok(())
+}
+
+/// Handle the _serve command (internal daemon).
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+fn cmd_serve(
+    session_id: String,
+    policy_path: Option<PathBuf>,
+    cwd: Option<String>,
+    idle_timeout: Option<u64>,
+    no_sandbox: bool,
+    ack_unsafe_sandbox: bool,
+    enable_network: bool,
+    ack_unsafe_network: bool,
+    ack_unsafe_write: bool,
+    strict_write: bool,
+    command: Vec<String>,
+) -> Result<()> {
+    // Detach from parent process group so we survive the parent exiting
+    #[cfg(unix)]
+    {
+        let _ = nix::unistd::setsid();
+    }
+
+    let (cmd, args) = split_command(command)?;
+    let mut policy = match policy_path {
+        Some(path) => load_policy_file(&path)?,
+        None => Policy::default(),
+    };
+    apply_cli_policy_overrides(
+        &mut policy,
+        no_sandbox,
+        ack_unsafe_sandbox,
+        enable_network,
+        ack_unsafe_network,
+        ack_unsafe_write,
+        strict_write,
+    );
+
+    let socket_path = session_client::socket_path(&session_id);
+    let timeout_secs = idle_timeout.unwrap_or(1800);
+
+    let config = ptybox::serve::ServeConfig {
+        session_id,
+        socket_path,
+        command: cmd,
+        args,
+        cwd,
+        policy,
+        artifacts: None,
+        idle_timeout: std::time::Duration::from_secs(timeout_secs),
+        initial_output: Box::new(std::io::stdout()),
+    };
+
+    match ptybox::serve::run_serve(config) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            // Write error as ready message for the parent to read
+            let error_json = serde_json::json!({
+                "ok": false,
+                "session_id": null,
+                "screen": null,
+                "error": err.message,
+            });
+            let _ = writeln!(std::io::stdout(), "{error_json}");
+            std::process::exit(exit_code_for_error(&err));
+        }
+    }
+}
+
+/// Common handler for session commands that return a screen.
+fn handle_session_response(
+    session_id: &str,
+    request: &ptybox::serve::protocol::ServeRequest,
+    json: bool,
+) -> Result<()> {
+    let resp = session_client::send_request(session_id, request);
+    match resp {
+        Ok(r) if r.ok => {
+            if json {
+                emit_json(&r)?;
+            } else if let Some(ref screen) = r.screen {
+                let text = session_client::format_screen_text(screen);
+                println!("{text}");
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            let msg = r.error.as_deref().unwrap_or("unknown error");
+            if json {
+                emit_json(&r)?;
+            } else {
+                eprintln!("error: {msg}");
+            }
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn print_protocol_help_text(help: &protocol_help::ProtocolHelp) {

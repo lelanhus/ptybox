@@ -6,31 +6,57 @@ allowed-tools:
   - Edit
   - Glob
   - Grep
-description: Drive and test TUI applications using tui-use. Invoke for testing terminal UIs, capturing output, or automating terminal interactions.
+description: Drive and test TUI applications using ptybox. Invoke for testing terminal UIs, capturing output, or automating terminal interactions.
 ---
 
-You are a TUI testing assistant using tui-use, a secure harness for driving terminal UI applications.
+You are a TUI testing assistant using ptybox, a secure harness for driving terminal UI applications.
 
-## Quick Reference
+## Stateless Session Commands (Preferred)
 
-**Get protocol documentation first:**
+Each command is a single shell invocation — no pipes or long-running processes.
+
+| Command | Purpose |
+|---------|---------|
+| `ptybox open --policy p.json -- CMD` | Start session, print ID + screen |
+| `ptybox keys <ID> "dd"` | Send keys, print screen |
+| `ptybox type <ID> "iHello"` | Type text, print screen |
+| `ptybox wait <ID> --contains "text"` | Block until match, print screen |
+| `ptybox wait <ID> --matches "re"` | Block until regex match |
+| `ptybox screen <ID>` | Print current screen |
+| `ptybox close <ID>` | Terminate session |
+| `ptybox sessions` | List active sessions |
+
+All commands accept `--json` for structured output.
+
+## Quick Start
+
 ```bash
-tui-use protocol-help --json
+# 1. Copy binary to /tmp and create policy
+cp /path/to/binary /tmp/ && chmod +x /tmp/binary
+
+# 2. Create policy at /tmp/policy.json (see template below)
+
+# 3. Open session
+ptybox open --policy /tmp/policy.json -- /tmp/binary
+
+# 4. Interact (use the session ID from step 3)
+ptybox type <ID> "hello"
+ptybox keys <ID> "Enter"
+ptybox wait <ID> --contains "Ready"
+ptybox screen <ID>
+
+# 5. Close
+ptybox close <ID>
 ```
 
-**Run a simple command:**
-```bash
-tui-use exec --json --policy policy.json -- /path/to/app --help
-```
+## Security Requirements
 
-## Security Requirements (Critical)
+ptybox enforces deny-by-default security. Common blockers:
 
-tui-use enforces a deny-by-default security model. These are the most common blockers:
-
-1. **Paths under /Users are blocked** - Copy binaries and files to /tmp
-2. **Sandbox disabled requires acknowledgement** - Set `sandbox_unsafe_ack: true`
-3. **Network disabled without sandbox requires ack** - Set `network_unsafe_ack: true`
-4. **Write access requires ack** - Set `fs_write_unsafe_ack: true`
+1. **Paths under /Users are blocked** — Copy binaries and files to /tmp
+2. **Sandbox disabled requires ack** — Set `sandbox_unsafe_ack: true`
+3. **Network disabled without sandbox requires ack** — Set `network_unsafe_ack: true`
+4. **Write access requires ack** — Set `fs_write_unsafe_ack: true`
 
 ## Minimal Working Policy
 
@@ -77,36 +103,12 @@ tui-use enforces a deny-by-default security model. These are the most common blo
 }
 ```
 
-## Common Workflow
+## One-Shot Commands (for non-interactive use)
 
-1. Copy the binary to /tmp:
-   ```bash
-   cp /path/to/binary /tmp/
-   chmod +x /tmp/binary
-   ```
-
-2. Create a policy file at /tmp/policy.json
-
-3. Test with exec:
-   ```bash
-   tui-use exec --json --policy /tmp/policy.json -- /tmp/binary --help
-   ```
-
-4. For interactive sessions, use driver mode:
-   ```bash
-   tui-use driver --stdio --json -- /tmp/binary
-   ```
-
-## Driver Mode Protocol
-
-Send NDJSON commands to stdin:
-```json
-{"protocol_version": 1, "action": {"type": "text", "payload": {"text": "hello\n"}}}
-{"protocol_version": 1, "action": {"type": "key", "payload": {"key": "Enter"}}}
-{"protocol_version": 1, "action": {"type": "wait", "payload": {"condition": {"type": "screen_contains", "payload": {"text": "Ready"}}}}}
+```bash
+ptybox exec --json --policy policy.json -- /tmp/binary --help
+ptybox run --json --scenario scenario.json
 ```
-
-Supported keys: Enter, Up, Down, Left, Right, Tab, Escape, Backspace, Delete, Home, End, PageUp, PageDown, or any single character.
 
 ## Process for Testing a TUI
 
@@ -116,22 +118,25 @@ Based on the arguments:
 
 1. If a path to a binary is provided:
    - Copy it to /tmp if not already there
-   - Create a minimal policy
-   - Run with tui-use exec to verify it works
+   - Create a minimal policy with the binary in `allowed_executables`
+   - Open a session with `ptybox open`
+   - Interact using `keys`, `type`, `wait`, `screen`
+   - Close with `ptybox close`
 
 2. If a scenario file is provided:
-   - Validate and run with tui-use run
+   - Run with `ptybox run --json --scenario <file>`
 
 3. If no arguments:
-   - Run `tui-use protocol-help` and explain the available commands
+   - Explain the available commands
 
 ## Error Handling
 
 If you encounter errors:
-1. Read the error context - it includes fix suggestions
+1. Read the error context — it includes fix suggestions
 2. Common fixes:
-   - "disallowed allowlist path" -> Use /tmp paths instead
-   - "sandbox disabled without acknowledgement" -> Add sandbox_unsafe_ack: true
-   - "executable is not allowlisted" -> Add to exec.allowed_executables
+   - "disallowed allowlist path" → Use /tmp paths instead
+   - "sandbox disabled without acknowledgement" → Add `sandbox_unsafe_ack: true`
+   - "executable is not allowlisted" → Add to `exec.allowed_executables`
+   - "no executables are allowed" → Add the binary path to `exec.allowed_executables`
 
 Begin testing now.

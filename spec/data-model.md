@@ -519,3 +519,57 @@ All user-facing errors must include:
 - `code` (stable)
 - `message` (human-readable)
 - `context` (structured: which step, which assertion, which path, etc.)
+
+---
+
+## Stateless Session Protocol (UDS)
+
+### Overview
+The session commands (`open`, `keys`, `type`, `wait`, `screen`, `close`, `sessions`) provide a stateless CLI for agent-driven TUI automation. A background daemon holds the PTY; thin client commands connect via Unix domain socket, send one action, receive a screen, and exit.
+
+Socket path: `/tmp/ptybox/s-{session_id}.sock`
+
+### ServeRequest
+One JSON line sent per connection:
+```json
+{ "command": { "type": "keys", "keys": "dd" } }
+{ "command": { "type": "text", "text": "hello" } }
+{ "command": { "type": "wait", "contains": "Ready", "matches": null, "timeout_ms": 5000 } }
+{ "command": { "type": "screen" } }
+{ "command": { "type": "resize", "rows": 40, "cols": 120 } }
+{ "command": { "type": "close" } }
+```
+
+### ServeCommand variants
+| Type | Fields | Description |
+|------|--------|-------------|
+| `keys` | `keys: String` | Send raw key string |
+| `text` | `text: String` | Type text into terminal |
+| `wait` | `contains?: String, matches?: String, timeout_ms?: u64` | Wait for condition |
+| `screen` | (none) | Get current screen |
+| `resize` | `rows: u16, cols: u16` | Resize terminal |
+| `close` | (none) | Terminate session, daemon exits |
+
+### ServeResponse
+One JSON line sent back:
+```json
+{ "ok": true, "screen": { "lines": [...], "cursor_row": 0, "cursor_col": 5, "rows": 24, "cols": 80 }, "error": null }
+{ "ok": false, "screen": null, "error": "wait condition timed out" }
+```
+
+### ScreenOutput
+| Field | Type | Description |
+|-------|------|-------------|
+| `lines` | `Vec<String>` | Text lines (trailing spaces trimmed) |
+| `cursor_row` | `u16` | Cursor row (0-based) |
+| `cursor_col` | `u16` | Cursor column (0-based) |
+| `rows` | `u16` | Terminal height |
+| `cols` | `u16` | Terminal width |
+
+### Daemon lifecycle
+- `open` spawns `ptybox serve` (hidden subcommand) as a child process with stdout piped
+- Daemon validates policy, spawns Session, binds UDS, writes initial screen JSON to stdout, closes stdout
+- Daemon calls `setsid()` to detach from parent
+- Daemon enters synchronous accept loop (one connection at a time)
+- Exits on: `close` command, idle timeout (default 30 min), or child process exit
+- Cleanup: remove socket file, terminate session

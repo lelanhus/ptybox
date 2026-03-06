@@ -594,5 +594,67 @@
       "Step 3: Verify exit codes are distinct (when appropriate) and documented"
     ],
     "passes": true
+  },
+  {
+    "category": "functional",
+    "description": "Stateless session CLI: `open` spawns a background daemon and prints session ID + initial screen.",
+    "steps": [
+      "Step 1: Run `ptybox open --policy <file> -- /bin/cat`",
+      "Step 2: Verify stdout prints a session ID (8 hex chars) on the first line",
+      "Step 3: Verify the session appears in `ptybox sessions`"
+    ],
+    "passes": true
+  },
+  {
+    "category": "functional",
+    "description": "Stateless session CLI: `keys`, `type`, `screen` commands send actions and return screen output.",
+    "steps": [
+      "Step 1: Open a session with `ptybox open --policy <file> -- /bin/cat`",
+      "Step 2: Send text with `ptybox type <ID> \"hello\"` and verify screen shows 'hello'",
+      "Step 3: Send keys with `ptybox keys <ID> \"Enter\"` and verify screen updates",
+      "Step 4: Get screen with `ptybox screen <ID>` and verify output matches"
+    ],
+    "passes": true
+  },
+  {
+    "category": "functional",
+    "description": "Stateless session CLI: `wait` blocks until a screen condition is met.",
+    "steps": [
+      "Step 1: Open a session",
+      "Step 2: Type text and then `ptybox wait <ID> --contains \"hello\"`",
+      "Step 3: Verify the wait returns immediately when the text is already on screen"
+    ],
+    "passes": true
+  },
+  {
+    "category": "functional",
+    "description": "Stateless session CLI: `close` terminates the session and cleans up the daemon.",
+    "steps": [
+      "Step 1: Open a session",
+      "Step 2: Run `ptybox close <ID>`",
+      "Step 3: Verify `ptybox sessions` shows no active sessions",
+      "Step 4: Verify the socket file is removed"
+    ],
+    "passes": true
+  },
+  {
+    "category": "functional",
+    "description": "Stateless session CLI: `sessions` lists active sessions with liveness status.",
+    "steps": [
+      "Step 1: Open two sessions",
+      "Step 2: Run `ptybox sessions` and verify both are listed as 'alive'",
+      "Step 3: Close one and verify `sessions` shows one alive and the other absent"
+    ],
+    "passes": true
+  },
+  {
+    "category": "functional",
+    "description": "Stateless session CLI: all commands support `--json` for structured output.",
+    "steps": [
+      "Step 1: Run `ptybox open --json --policy <file> -- /bin/cat`",
+      "Step 2: Verify JSON output includes `ok`, `session_id`, and `screen` fields",
+      "Step 3: Run `ptybox screen <ID> --json` and verify JSON response structure"
+    ],
+    "passes": true
   }
 ]

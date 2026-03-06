@@ -6,6 +6,12 @@ This project aims to follow “Keep a Changelog” style entries and Semantic Ve
 
 ## [Unreleased]
 
+### Added
+- **Stateless session CLI** for agent-friendly TUI automation: `open`, `keys`, `type`, `wait`, `screen`, `close`, `sessions` commands. Each invocation is a single shell call — a background daemon holds the PTY and accepts commands via Unix domain socket. Default output is compact text (screen lines only); `--json` for structured output.
+- New `ptybox::serve` library module with `ServeConfig`, `ServeRequest`/`ServeResponse` types, and `run_serve()` daemon loop.
+- New `ptybox::actions` internal module: extracted `perform_action()`, `wait_for_condition()`, and `condition_satisfied()` from the driver for reuse by both `driver` and `serve` modules.
+- `spec/data-model.md` documents the UDS protocol types (`ServeRequest`, `ServeResponse`, `ScreenOutput`).
+
 ### Fixed
 - Replay mismatch caused by non-deterministic `pty_output`/`pty_eof` events: added `Events` normalization filter to strip observation `events` arrays during comparison.
 

@@ -886,6 +886,7 @@ dependencies = [
  "ctrlc",
  "indicatif",
  "miette",
+ "nix 0.29.0",
  "ptybox",
  "ratatui",
  "serde",
