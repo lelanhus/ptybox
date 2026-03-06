@@ -3,6 +3,7 @@
 //! Provides UDS connection helpers and output formatting used by
 //! `keys`, `type`, `wait`, `screen`, `close`, and `sessions` commands.
 
+use miette::{IntoDiagnostic, Result, WrapErr};
 use ptybox::serve::protocol::{ScreenOutput, ServeRequest, ServeResponse};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -33,37 +34,49 @@ pub fn session_id_from_path(path: &Path) -> Option<String> {
 }
 
 /// Connect to a session's UDS and send a request, returning the response.
-pub fn send_request(session_id: &str, request: &ServeRequest) -> Result<ServeResponse, String> {
+pub fn send_request(session_id: &str, request: &ServeRequest) -> Result<ServeResponse> {
     let path = socket_path(session_id);
     if !path.exists() {
-        return Err(format!(
+        return Err(miette::miette!(
             "session '{session_id}' not found (socket does not exist)"
         ));
     }
 
-    let mut stream =
-        UnixStream::connect(&path).map_err(|e| format!("failed to connect to session: {e}"))?;
+    let mut stream = UnixStream::connect(&path)
+        .into_diagnostic()
+        .wrap_err("failed to connect to session")?;
 
-    let json = serde_json::to_string(request).map_err(|e| format!("serialize error: {e}"))?;
-    writeln!(stream, "{json}").map_err(|e| format!("write error: {e}"))?;
-    stream.flush().map_err(|e| format!("flush error: {e}"))?;
+    let json = serde_json::to_string(request)
+        .into_diagnostic()
+        .wrap_err("failed to serialize request")?;
+    writeln!(stream, "{json}")
+        .into_diagnostic()
+        .wrap_err("failed to write request")?;
+    stream
+        .flush()
+        .into_diagnostic()
+        .wrap_err("failed to flush request")?;
 
     // Shut down the write half so the server knows we're done sending
     stream
         .shutdown(std::net::Shutdown::Write)
-        .map_err(|e| format!("shutdown write error: {e}"))?;
+        .into_diagnostic()
+        .wrap_err("failed to shutdown write half")?;
 
     let mut reader = BufReader::new(&stream);
     let mut response_line = String::new();
     reader
         .read_line(&mut response_line)
-        .map_err(|e| format!("read error: {e}"))?;
+        .into_diagnostic()
+        .wrap_err("failed to read response")?;
 
     if response_line.trim().is_empty() {
-        return Err("empty response from server".to_string());
+        return Err(miette::miette!("empty response from server"));
     }
 
-    serde_json::from_str(response_line.trim()).map_err(|e| format!("invalid response JSON: {e}"))
+    serde_json::from_str(response_line.trim())
+        .into_diagnostic()
+        .wrap_err("invalid response JSON")
 }
 
 /// Format screen output for display. Returns the string to print.

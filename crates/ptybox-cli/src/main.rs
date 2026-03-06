@@ -419,12 +419,14 @@ fn main() -> Result<()> {
             cwd,
             artifacts,
             overwrite,
-            no_sandbox,
-            ack_unsafe_sandbox,
-            enable_network,
-            ack_unsafe_network,
-            ack_unsafe_write,
-            strict_write,
+            PolicyOverrides {
+                no_sandbox,
+                ack_unsafe_sandbox,
+                enable_network,
+                ack_unsafe_network,
+                ack_unsafe_write,
+                strict_write,
+            },
             command,
         ),
         Commands::Run {
@@ -449,12 +451,14 @@ fn main() -> Result<()> {
             tui,
             artifacts,
             overwrite,
-            no_sandbox,
-            ack_unsafe_sandbox,
-            enable_network,
-            ack_unsafe_network,
-            ack_unsafe_write,
-            strict_write,
+            PolicyOverrides {
+                no_sandbox,
+                ack_unsafe_sandbox,
+                enable_network,
+                ack_unsafe_network,
+                ack_unsafe_write,
+                strict_write,
+            },
         ),
         Commands::Driver {
             stdio,
@@ -477,12 +481,14 @@ fn main() -> Result<()> {
             cwd,
             artifacts,
             overwrite,
-            no_sandbox,
-            ack_unsafe_sandbox,
-            enable_network,
-            ack_unsafe_network,
-            strict_write,
-            ack_unsafe_write,
+            PolicyOverrides {
+                no_sandbox,
+                ack_unsafe_sandbox,
+                enable_network,
+                ack_unsafe_network,
+                ack_unsafe_write,
+                strict_write,
+            },
             command,
         ),
         Commands::ProtocolHelp { json } => cmd_protocol_help(json),
@@ -523,12 +529,14 @@ fn main() -> Result<()> {
             policy,
             cwd,
             idle_timeout,
-            no_sandbox,
-            ack_unsafe_sandbox,
-            enable_network,
-            ack_unsafe_network,
-            ack_unsafe_write,
-            strict_write,
+            PolicyOverrides {
+                no_sandbox,
+                ack_unsafe_sandbox,
+                enable_network,
+                ack_unsafe_network,
+                ack_unsafe_write,
+                strict_write,
+            },
             command,
         ),
         Commands::Keys {
@@ -568,12 +576,14 @@ fn main() -> Result<()> {
             policy,
             cwd,
             idle_timeout,
-            no_sandbox,
-            ack_unsafe_sandbox,
-            enable_network,
-            ack_unsafe_network,
-            ack_unsafe_write,
-            strict_write,
+            PolicyOverrides {
+                no_sandbox,
+                ack_unsafe_sandbox,
+                enable_network,
+                ack_unsafe_network,
+                ack_unsafe_write,
+                strict_write,
+            },
             command,
         ),
     }
@@ -584,7 +594,7 @@ fn main() -> Result<()> {
 // =============================================================================
 
 /// Handle the exec command.
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+#[allow(clippy::too_many_arguments)]
 fn cmd_exec(
     json: bool,
     policy: Option<PathBuf>,
@@ -592,12 +602,7 @@ fn cmd_exec(
     cwd: Option<String>,
     artifacts: Option<PathBuf>,
     overwrite: bool,
-    no_sandbox: bool,
-    ack_unsafe_sandbox: bool,
-    enable_network: bool,
-    ack_unsafe_network: bool,
-    ack_unsafe_write: bool,
-    strict_write: bool,
+    overrides: PolicyOverrides,
     command: Vec<String>,
 ) -> Result<()> {
     let (cmd, args) = split_command(command)?;
@@ -605,20 +610,8 @@ fn cmd_exec(
         Some(path) => load_policy_file(&path)?,
         None => Policy::default(),
     };
-    apply_cli_policy_overrides(
-        &mut policy,
-        no_sandbox,
-        ack_unsafe_sandbox,
-        enable_network,
-        ack_unsafe_network,
-        ack_unsafe_write,
-        strict_write,
-    );
-    if let Some(dir) = cwd.as_ref() {
-        if !std::path::Path::new(dir).is_absolute() {
-            return emit_cli_error(json, "--cwd must be an absolute path");
-        }
-    }
+    apply_cli_policy_overrides(&mut policy, &overrides);
+    validate_cwd(cwd.as_deref(), json)?;
     if explain_policy {
         let cwd = cwd.clone().or_else(|| policy.fs.working_dir.clone());
         let run_config = ptybox::model::RunConfig {
@@ -641,7 +634,7 @@ fn cmd_exec(
 }
 
 /// Handle the run command.
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+#[allow(clippy::too_many_arguments)]
 fn cmd_run(
     json: bool,
     scenario_path: PathBuf,
@@ -650,24 +643,14 @@ fn cmd_run(
     tui: bool,
     artifacts: Option<PathBuf>,
     overwrite: bool,
-    no_sandbox: bool,
-    ack_unsafe_sandbox: bool,
-    enable_network: bool,
-    ack_unsafe_network: bool,
-    ack_unsafe_write: bool,
-    strict_write: bool,
+    overrides: PolicyOverrides,
 ) -> Result<()> {
-    let mut scenario = load_scenario(scenario_path.to_str().unwrap_or(""))?;
+    let path_str = scenario_path
+        .to_str()
+        .ok_or_else(|| miette::miette!("scenario path is not valid UTF-8"))?;
+    let mut scenario = load_scenario(path_str)?;
     let mut policy = ptybox::scenario::load_policy_ref(&scenario.run.policy)?;
-    apply_cli_policy_overrides(
-        &mut policy,
-        no_sandbox,
-        ack_unsafe_sandbox,
-        enable_network,
-        ack_unsafe_network,
-        ack_unsafe_write,
-        strict_write,
-    );
+    apply_cli_policy_overrides(&mut policy, &overrides);
     if let Some(dir) = scenario.run.cwd.as_ref() {
         if !std::path::Path::new(dir).is_absolute() {
             return emit_cli_error(json, "scenario cwd must be an absolute path");
@@ -710,7 +693,7 @@ fn cmd_run(
 }
 
 /// Handle the driver command.
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+#[allow(clippy::too_many_arguments)]
 fn cmd_driver(
     stdio: bool,
     json: bool,
@@ -718,12 +701,7 @@ fn cmd_driver(
     cwd: Option<String>,
     artifacts: Option<PathBuf>,
     overwrite: bool,
-    no_sandbox: bool,
-    ack_unsafe_sandbox: bool,
-    enable_network: bool,
-    ack_unsafe_network: bool,
-    strict_write: bool,
-    ack_unsafe_write: bool,
+    overrides: PolicyOverrides,
     command: Vec<String>,
 ) -> Result<()> {
     if !stdio || !json {
@@ -734,20 +712,8 @@ fn cmd_driver(
         Some(path) => load_policy_file(&path)?,
         None => Policy::default(),
     };
-    apply_cli_policy_overrides(
-        &mut policy,
-        no_sandbox,
-        ack_unsafe_sandbox,
-        enable_network,
-        ack_unsafe_network,
-        ack_unsafe_write,
-        strict_write,
-    );
-    if let Some(dir) = cwd.as_ref() {
-        if !std::path::Path::new(dir).is_absolute() {
-            return emit_cli_error(json, "--cwd must be an absolute path");
-        }
-    }
+    apply_cli_policy_overrides(&mut policy, &overrides);
+    validate_cwd(cwd.as_deref(), json)?;
 
     let config = ptybox::driver::DriverConfig {
         command: cmd,
@@ -812,7 +778,12 @@ fn cmd_replay(
     } else if has_none {
         Some(Vec::new())
     } else {
-        Some(normalize.into_iter().map(|f| f.into()).collect())
+        Some(
+            normalize
+                .into_iter()
+                .filter_map(NormalizeFilterArg::to_normalization_filter)
+                .collect(),
+        )
     };
     let options = ptybox::replay::ReplayOptions {
         strict,
@@ -919,42 +890,54 @@ enum NormalizeFilterArg {
     Events,
 }
 
-impl From<NormalizeFilterArg> for ptybox::model::NormalizationFilter {
-    fn from(value: NormalizeFilterArg) -> Self {
-        match value {
-            NormalizeFilterArg::All => unreachable!("all handled before normalization mapping"),
-            NormalizeFilterArg::None => {
-                unreachable!("none handled before normalization mapping")
+impl NormalizeFilterArg {
+    /// Convert a specific filter variant to the model type.
+    /// Returns `None` for `All` and `None` variants, which must be handled by the caller.
+    fn to_normalization_filter(self) -> Option<ptybox::model::NormalizationFilter> {
+        match self {
+            Self::All | Self::None => Option::None,
+            Self::SnapshotId => Some(ptybox::model::NormalizationFilter::SnapshotId),
+            Self::RunId => Some(ptybox::model::NormalizationFilter::RunId),
+            Self::RunTimestamps => Some(ptybox::model::NormalizationFilter::RunTimestamps),
+            Self::StepTimestamps => Some(ptybox::model::NormalizationFilter::StepTimestamps),
+            Self::ObservationTimestamp => {
+                Some(ptybox::model::NormalizationFilter::ObservationTimestamp)
             }
-            NormalizeFilterArg::SnapshotId => Self::SnapshotId,
-            NormalizeFilterArg::RunId => Self::RunId,
-            NormalizeFilterArg::RunTimestamps => Self::RunTimestamps,
-            NormalizeFilterArg::StepTimestamps => Self::StepTimestamps,
-            NormalizeFilterArg::ObservationTimestamp => Self::ObservationTimestamp,
-            NormalizeFilterArg::SessionId => Self::SessionId,
-            NormalizeFilterArg::Events => Self::Events,
+            Self::SessionId => Some(ptybox::model::NormalizationFilter::SessionId),
+            Self::Events => Some(ptybox::model::NormalizationFilter::Events),
         }
     }
 }
 
-fn apply_cli_policy_overrides(
-    policy: &mut Policy,
+/// CLI flags that override policy settings.
+struct PolicyOverrides {
     no_sandbox: bool,
     ack_unsafe_sandbox: bool,
     enable_network: bool,
     ack_unsafe_network: bool,
     ack_unsafe_write: bool,
     strict_write: bool,
-) {
+}
+
+fn validate_cwd(cwd: Option<&str>, json: bool) -> Result<()> {
+    if let Some(dir) = cwd {
+        if !std::path::Path::new(dir).is_absolute() {
+            return emit_cli_error(json, "--cwd must be an absolute path");
+        }
+    }
+    Ok(())
+}
+
+fn apply_cli_policy_overrides(policy: &mut Policy, overrides: &PolicyOverrides) {
     use ptybox::model::policy::{NetworkPolicy, SandboxMode};
 
     // Handle sandbox mode
-    if no_sandbox {
+    if overrides.no_sandbox {
         // Set disabled with ack if ack_unsafe_sandbox is also set
         policy.sandbox = SandboxMode::Disabled {
-            ack: ack_unsafe_sandbox,
+            ack: overrides.ack_unsafe_sandbox,
         };
-    } else if ack_unsafe_sandbox {
+    } else if overrides.ack_unsafe_sandbox {
         // If already disabled, update the ack
         if let SandboxMode::Disabled { ref mut ack } = policy.sandbox {
             *ack = true;
@@ -962,12 +945,12 @@ fn apply_cli_policy_overrides(
     }
 
     // Handle network policy
-    if enable_network {
+    if overrides.enable_network {
         // Set enabled with ack if ack_unsafe_network is also set
         policy.network = NetworkPolicy::Enabled {
-            ack: ack_unsafe_network,
+            ack: overrides.ack_unsafe_network,
         };
-    } else if ack_unsafe_network {
+    } else if overrides.ack_unsafe_network {
         // If already enabled, update the ack
         if let NetworkPolicy::Enabled { ref mut ack } = policy.network {
             *ack = true;
@@ -975,15 +958,15 @@ fn apply_cli_policy_overrides(
     }
 
     // Handle network enforcement ack (for unenforced network when sandbox disabled)
-    if ack_unsafe_network {
+    if overrides.ack_unsafe_network {
         policy.network_enforcement.unenforced_ack = true;
     }
 
     // Handle filesystem write acknowledgement
-    if ack_unsafe_write {
+    if overrides.ack_unsafe_write {
         policy.fs.write_ack = true;
     }
-    if strict_write {
+    if overrides.strict_write {
         policy.fs.strict_write = true;
     }
 }
@@ -1080,18 +1063,12 @@ impl ServeArgsBuilder {
 }
 
 /// Handle the open command: spawn a _serve daemon and print the initial screen.
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn cmd_open(
     json: bool,
     policy: Option<PathBuf>,
     cwd: Option<String>,
     idle_timeout: Option<u64>,
-    no_sandbox: bool,
-    ack_unsafe_sandbox: bool,
-    enable_network: bool,
-    ack_unsafe_network: bool,
-    ack_unsafe_write: bool,
-    strict_write: bool,
+    overrides: PolicyOverrides,
     command: Vec<String>,
 ) -> Result<()> {
     use std::io::BufRead;
@@ -1108,12 +1085,12 @@ fn cmd_open(
     if let Some(t) = idle_timeout {
         builder.opt("--idle-timeout", &t.to_string());
     }
-    builder.flag_if("--no-sandbox", no_sandbox);
-    builder.flag_if("--ack-unsafe-sandbox", ack_unsafe_sandbox);
-    builder.flag_if("--enable-network", enable_network);
-    builder.flag_if("--ack-unsafe-network", ack_unsafe_network);
-    builder.flag_if("--ack-unsafe-write", ack_unsafe_write);
-    builder.flag_if("--strict-write", strict_write);
+    builder.flag_if("--no-sandbox", overrides.no_sandbox);
+    builder.flag_if("--ack-unsafe-sandbox", overrides.ack_unsafe_sandbox);
+    builder.flag_if("--enable-network", overrides.enable_network);
+    builder.flag_if("--ack-unsafe-network", overrides.ack_unsafe_network);
+    builder.flag_if("--ack-unsafe-write", overrides.ack_unsafe_write);
+    builder.flag_if("--strict-write", overrides.strict_write);
     let serve_args = builder.finish(command);
 
     // Spawn the daemon with stdout piped so we can read the ready message
@@ -1305,18 +1282,12 @@ fn cmd_sessions(json: bool) -> Result<()> {
 }
 
 /// Handle the _serve command (internal daemon).
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn cmd_serve(
     session_id: String,
     policy_path: Option<PathBuf>,
     cwd: Option<String>,
     idle_timeout: Option<u64>,
-    no_sandbox: bool,
-    ack_unsafe_sandbox: bool,
-    enable_network: bool,
-    ack_unsafe_network: bool,
-    ack_unsafe_write: bool,
-    strict_write: bool,
+    overrides: PolicyOverrides,
     command: Vec<String>,
 ) -> Result<()> {
     // Detach from parent process group so we survive the parent exiting
@@ -1330,15 +1301,7 @@ fn cmd_serve(
         Some(path) => load_policy_file(&path)?,
         None => Policy::default(),
     };
-    apply_cli_policy_overrides(
-        &mut policy,
-        no_sandbox,
-        ack_unsafe_sandbox,
-        enable_network,
-        ack_unsafe_network,
-        ack_unsafe_write,
-        strict_write,
-    );
+    apply_cli_policy_overrides(&mut policy, &overrides);
 
     let socket_path = session_client::socket_path(&session_id);
     let timeout_secs = idle_timeout.unwrap_or(1800);

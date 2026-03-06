@@ -6,7 +6,7 @@
 //! - Run metadata and assertion results
 
 use miette::{IntoDiagnostic, Result, WrapErr};
-use ptybox::model::{Color, RunResult, ScreenSnapshot};
+use ptybox::model::{RunResult, ScreenSnapshot};
 use std::fs;
 use std::path::Path;
 
@@ -30,7 +30,7 @@ pub fn generate_trace(artifacts_dir: &Path, output_path: &Path) -> Result<()> {
     let transcript = fs::read_to_string(&transcript_path).unwrap_or_default();
 
     // Generate HTML
-    let html = render_html(&run_result, &snapshots, &transcript);
+    let html = render_html(&run_result, &snapshots, &transcript)?;
 
     // Write output
     fs::write(output_path, html)
@@ -69,10 +69,20 @@ fn load_snapshots(snapshots_dir: &Path) -> Result<Vec<ScreenSnapshot>> {
     Ok(snapshots)
 }
 
-fn render_html(run_result: &RunResult, snapshots: &[ScreenSnapshot], transcript: &str) -> String {
-    let steps_json = serde_json::to_string(&run_result.steps).unwrap_or_else(|_| "[]".to_string());
-    let snapshots_json = serde_json::to_string(snapshots).unwrap_or_else(|_| "[]".to_string());
-    let run_json = serde_json::to_string(run_result).unwrap_or_else(|_| "{}".to_string());
+fn render_html(
+    run_result: &RunResult,
+    snapshots: &[ScreenSnapshot],
+    transcript: &str,
+) -> Result<String> {
+    let steps_json = serde_json::to_string(&run_result.steps)
+        .into_diagnostic()
+        .wrap_err("failed to serialize steps")?;
+    let snapshots_json = serde_json::to_string(snapshots)
+        .into_diagnostic()
+        .wrap_err("failed to serialize snapshots")?;
+    let run_json = serde_json::to_string(run_result)
+        .into_diagnostic()
+        .wrap_err("failed to serialize run result")?;
     let transcript_escaped = html_escape(transcript);
 
     let status_class = match run_result.status {
@@ -82,7 +92,7 @@ fn render_html(run_result: &RunResult, snapshots: &[ScreenSnapshot], transcript:
         ptybox::model::RunStatus::Canceled => "status-canceled",
     };
 
-    format!(
+    Ok(format!(
         r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -153,7 +163,7 @@ const RUN = {run_json};
         run_json = run_json,
         CSS = CSS,
         JS = JS,
-    )
+    ))
 }
 
 fn html_escape(s: &str) -> String {
@@ -162,43 +172,6 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
-}
-
-/// Convert a Color to CSS color string.
-#[allow(dead_code)]
-fn color_to_css(color: &Color) -> String {
-    match color {
-        Color::Default => String::new(),
-        Color::Ansi16(n) => {
-            // Standard 16 ANSI colors
-            let colors = [
-                "#000000", "#cd0000", "#00cd00", "#cdcd00", "#0000ee", "#cd00cd", "#00cdcd",
-                "#e5e5e5", "#7f7f7f", "#ff0000", "#00ff00", "#ffff00", "#5c5cff", "#ff00ff",
-                "#00ffff", "#ffffff",
-            ];
-            (*colors.get(*n as usize).unwrap_or(&"")).to_string()
-        }
-        Color::Ansi256(n) => {
-            let n = *n as usize;
-            if n < 16 {
-                // Safe: n is checked to be < 16, which fits in u8
-                #[allow(clippy::cast_possible_truncation)]
-                return color_to_css(&Color::Ansi16(n as u8));
-            }
-            if n < 232 {
-                // 6x6x6 color cube
-                let idx = n - 16;
-                let r = (idx / 36) * 51;
-                let g = ((idx / 6) % 6) * 51;
-                let b = (idx % 6) * 51;
-                return format!("#{r:02x}{g:02x}{b:02x}");
-            }
-            // Grayscale
-            let gray = 8 + (n - 232) * 10;
-            format!("#{gray:02x}{gray:02x}{gray:02x}")
-        }
-        Color::Rgb { r, g, b } => format!("#{r:02x}{g:02x}{b:02x}"),
-    }
 }
 
 const CSS: &str = r"

@@ -206,12 +206,9 @@ where
             }
             Err(err) => {
                 consecutive_parse_errors += 1;
-                let response = DriverResponseV2 {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: "unknown".to_string(),
-                    status: DriverResponseStatus::Error,
-                    observation: None,
-                    error: Some(ErrorInfo {
+                let response = error_response(
+                    "unknown",
+                    ErrorInfo {
                         code: "E_PROTOCOL".to_string(),
                         message: "invalid json request".to_string(),
                         context: Some(serde_json::json!({
@@ -221,10 +218,10 @@ where
                             "consecutive_errors": consecutive_parse_errors,
                             "max_consecutive_errors": MAX_CONSECUTIVE_PARSE_ERRORS
                         })),
-                    }),
-                    action_metrics: None,
-                    budget_status: None,
-                };
+                    },
+                    None,
+                    None,
+                );
                 emit_driver_response(&mut output, &response)?;
                 if consecutive_parse_errors >= MAX_CONSECUTIVE_PARSE_ERRORS {
                     final_error = Some(RunnerError::protocol(
@@ -241,22 +238,19 @@ where
         };
 
         if request.protocol_version != PROTOCOL_VERSION {
-            let response = DriverResponseV2 {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: request.request_id.clone(),
-                status: DriverResponseStatus::Error,
-                observation: None,
-                error: Some(ErrorInfo {
+            let response = error_response(
+                &request.request_id,
+                ErrorInfo {
                     code: "E_PROTOCOL_VERSION_MISMATCH".to_string(),
                     message: "unsupported protocol version".to_string(),
                     context: Some(serde_json::json!({
                         "provided_version": request.protocol_version,
                         "supported_version": PROTOCOL_VERSION
                     })),
-                }),
-                action_metrics: None,
-                budget_status: None,
-            };
+                },
+                None,
+                None,
+            );
             emit_driver_response(&mut output, &response)?;
             final_error = Some(RunnerError::protocol_version_mismatch(
                 "unsupported protocol version",
@@ -265,24 +259,21 @@ where
         }
 
         if sequence >= policy.budgets.max_steps {
-            let response = DriverResponseV2 {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: request.request_id.clone(),
-                status: DriverResponseStatus::Error,
-                observation: None,
-                error: Some(ErrorInfo {
+            let response = error_response(
+                &request.request_id,
+                ErrorInfo {
                     code: "E_TIMEOUT".to_string(),
                     message: "action budget exceeded".to_string(),
                     context: Some(serde_json::json!({ "max_steps": policy.budgets.max_steps })),
-                }),
-                action_metrics: None,
-                budget_status: Some(make_budget_status(
+                },
+                Some(make_budget_status(
                     sequence,
                     &policy,
                     &run_started,
                     output_bytes,
                 )),
-            };
+                None,
+            );
             emit_driver_response(&mut output, &response)?;
             final_error = Some(RunnerError::timeout(
                 "E_TIMEOUT",
@@ -293,26 +284,23 @@ where
         }
 
         if elapsed_ms(&run_started) > policy.budgets.max_runtime_ms {
-            let response = DriverResponseV2 {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: request.request_id.clone(),
-                status: DriverResponseStatus::Error,
-                observation: None,
-                error: Some(ErrorInfo {
+            let response = error_response(
+                &request.request_id,
+                ErrorInfo {
                     code: "E_TIMEOUT".to_string(),
                     message: "run exceeded max runtime budget".to_string(),
                     context: Some(serde_json::json!({
                         "max_runtime_ms": policy.budgets.max_runtime_ms
                     })),
-                }),
-                action_metrics: None,
-                budget_status: Some(make_budget_status(
+                },
+                Some(make_budget_status(
                     sequence,
                     &policy,
                     &run_started,
                     output_bytes,
                 )),
-            };
+                None,
+            );
             emit_driver_response(&mut output, &response)?;
             final_error = Some(RunnerError::timeout(
                 "E_TIMEOUT",
@@ -339,23 +327,20 @@ where
         ) {
             Ok(obs) => obs,
             Err(err) => {
-                let response = DriverResponseV2 {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: request.request_id.clone(),
-                    status: DriverResponseStatus::Error,
-                    observation: None,
-                    error: Some(err.to_error_info()),
-                    action_metrics: Some(DriverActionMetrics {
-                        sequence: sequence + 1,
-                        duration_ms: elapsed_ms(&action_started),
-                    }),
-                    budget_status: Some(make_budget_status(
+                let response = error_response(
+                    &request.request_id,
+                    err.to_error_info(),
+                    Some(make_budget_status(
                         sequence,
                         &policy,
                         &run_started,
                         output_bytes,
                     )),
-                };
+                    Some(DriverActionMetrics {
+                        sequence: sequence + 1,
+                        duration_ms: elapsed_ms(&action_started),
+                    }),
+                );
                 emit_driver_response(&mut output, &response)?;
                 final_error = Some(err);
                 break;
@@ -374,23 +359,20 @@ where
                     "max_output_bytes": policy.budgets.max_output_bytes
                 })),
             );
-            let response = DriverResponseV2 {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: request.request_id.clone(),
-                status: DriverResponseStatus::Error,
-                observation: None,
-                error: Some(err.to_error_info()),
-                action_metrics: Some(DriverActionMetrics {
-                    sequence: sequence + 1,
-                    duration_ms: elapsed_ms(&action_started),
-                }),
-                budget_status: Some(make_budget_status(
+            let response = error_response(
+                &request.request_id,
+                err.to_error_info(),
+                Some(make_budget_status(
                     sequence,
                     &policy,
                     &run_started,
                     output_bytes,
                 )),
-            };
+                Some(DriverActionMetrics {
+                    sequence: sequence + 1,
+                    duration_ms: elapsed_ms(&action_started),
+                }),
+            );
             emit_driver_response(&mut output, &response)?;
             final_error = Some(err);
             break;
@@ -403,23 +385,20 @@ where
                     "max_snapshot_bytes": policy.budgets.max_snapshot_bytes
                 })),
             );
-            let response = DriverResponseV2 {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: request.request_id.clone(),
-                status: DriverResponseStatus::Error,
-                observation: None,
-                error: Some(err.to_error_info()),
-                action_metrics: Some(DriverActionMetrics {
-                    sequence: sequence + 1,
-                    duration_ms: elapsed_ms(&action_started),
-                }),
-                budget_status: Some(make_budget_status(
+            let response = error_response(
+                &request.request_id,
+                err.to_error_info(),
+                Some(make_budget_status(
                     sequence,
                     &policy,
                     &run_started,
                     output_bytes,
                 )),
-            };
+                Some(DriverActionMetrics {
+                    sequence: sequence + 1,
+                    duration_ms: elapsed_ms(&action_started),
+                }),
+            );
             emit_driver_response(&mut output, &response)?;
             final_error = Some(err);
             break;
@@ -569,6 +548,23 @@ where
         return Err(err);
     }
     Ok(())
+}
+
+fn error_response(
+    request_id: &str,
+    error: ErrorInfo,
+    budget_status: Option<BudgetStatus>,
+    action_metrics: Option<DriverActionMetrics>,
+) -> DriverResponseV2 {
+    DriverResponseV2 {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: request_id.to_string(),
+        status: DriverResponseStatus::Error,
+        observation: None,
+        error: Some(error),
+        action_metrics,
+        budget_status,
+    }
 }
 
 fn make_budget_status(
