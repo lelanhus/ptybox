@@ -99,6 +99,20 @@ fn request(request_id: &str, action_type: &str, payload: serde_json::Value) -> s
     })
 }
 
+/// Consume the initial handshake line emitted by the driver on startup.
+///
+/// Returns the handshake as a parsed JSON value.
+fn consume_handshake(child: &mut Child) -> serde_json::Value {
+    let line = read_response_line(child);
+    let value: serde_json::Value = serde_json::from_str(&line).expect("failed to parse handshake");
+    assert_eq!(
+        value.get("type").and_then(|v| v.as_str()),
+        Some("handshake"),
+        "expected handshake message, got: {line}"
+    );
+    value
+}
+
 /// Send an action to the driver and read the response envelope.
 fn send_action(child: &mut Child, action: serde_json::Value) -> DriverResponseV2 {
     let stdin = child.stdin.as_mut().expect("stdin not available");
@@ -206,6 +220,7 @@ fn driver_rejects_non_allowlisted_executable() {
 #[test]
 fn driver_accepts_text_action() {
     let mut child = spawn_driver("/bin/cat");
+    consume_handshake(&mut child);
 
     let response = send_action(
         &mut child,
@@ -231,6 +246,7 @@ fn driver_accepts_text_action() {
 #[test]
 fn driver_accepts_key_action() {
     let mut child = spawn_driver("/bin/cat");
+    consume_handshake(&mut child);
 
     let response = send_action(
         &mut child,
@@ -248,6 +264,7 @@ fn driver_accepts_key_action() {
 #[test]
 fn driver_accepts_resize_action() {
     let mut child = spawn_driver("/bin/cat");
+    consume_handshake(&mut child);
 
     let response = send_action(
         &mut child,
@@ -267,6 +284,7 @@ fn driver_accepts_resize_action() {
 #[test]
 fn driver_terminate_exits_cleanly() {
     let mut child = spawn_driver("/bin/cat");
+    consume_handshake(&mut child);
 
     let response = send_action(&mut child, request("req-term", "terminate", json!({})));
     assert_eq!(response.status, DriverResponseStatus::Ok);
@@ -304,6 +322,7 @@ fn driver_rejects_wrong_protocol_version() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn driver");
+    consume_handshake(&mut child);
 
     let action = json!({
         "protocol_version": 999,
@@ -350,6 +369,7 @@ fn driver_version_mismatch_includes_context() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn driver");
+    consume_handshake(&mut child);
 
     let action = json!({
         "protocol_version": 42,
@@ -404,6 +424,7 @@ fn driver_rejects_malformed_json() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn driver");
+    consume_handshake(&mut child);
 
     let stdin = child.stdin.as_mut().expect("stdin not available");
     writeln!(stdin, "{{not valid json}}").expect("failed to write");
@@ -416,8 +437,10 @@ fn driver_rejects_malformed_json() {
         response
     );
 
+    // With error recovery, a single malformed JSON does not kill the session.
+    // The driver continues and exits normally when stdin closes.
     let status = child.wait().expect("failed to wait");
-    assert!(!status.success());
+    assert!(status.success());
 }
 
 #[test]
@@ -438,6 +461,7 @@ fn driver_malformed_json_includes_helpful_context() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn driver");
+    consume_handshake(&mut child);
 
     let stdin = child.stdin.as_mut().expect("stdin not available");
     writeln!(stdin, "garbage input").expect("failed to write");
@@ -482,6 +506,7 @@ fn driver_rejects_missing_protocol_version() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn driver");
+    consume_handshake(&mut child);
 
     // Missing protocol_version field
     let action = json!({
@@ -524,6 +549,7 @@ fn driver_rejects_missing_action() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn driver");
+    consume_handshake(&mut child);
 
     // Missing action field
     let action = json!({
@@ -552,6 +578,7 @@ fn driver_rejects_missing_action() {
 #[test]
 fn driver_ignores_empty_lines() {
     let mut child = spawn_driver("/bin/cat");
+    consume_handshake(&mut child);
 
     // Send empty lines (should be ignored), then a real action
     {
@@ -587,6 +614,7 @@ fn driver_ignores_empty_lines() {
 #[test]
 fn driver_handles_eof_gracefully() {
     let mut child = spawn_driver("/bin/cat");
+    consume_handshake(&mut child);
 
     // Close stdin without sending terminate
     drop(child.stdin.take());
@@ -599,6 +627,7 @@ fn driver_handles_eof_gracefully() {
 #[test]
 fn driver_multiple_actions_sequential() {
     let mut child = spawn_driver("/bin/cat");
+    consume_handshake(&mut child);
 
     // Send multiple text actions
     for i in 0..5 {
@@ -635,6 +664,7 @@ fn driver_multiple_actions_sequential() {
 #[test]
 fn driver_observation_includes_screen_snapshot() {
     let mut child = spawn_driver("/bin/cat");
+    consume_handshake(&mut child);
 
     let response = send_action(
         &mut child,
@@ -652,6 +682,7 @@ fn driver_observation_includes_screen_snapshot() {
 #[test]
 fn driver_observation_includes_transcript_delta() {
     let mut child = spawn_driver("/bin/cat");
+    consume_handshake(&mut child);
 
     let response = send_action(
         &mut child,
@@ -702,6 +733,7 @@ fn driver_artifacts_are_replay_compatible() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn driver");
+    consume_handshake(&mut child);
 
     let response = send_action(
         &mut child,

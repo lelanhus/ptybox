@@ -1,3 +1,14 @@
+//! macOS Seatbelt sandbox profile generation and availability checking.
+//!
+//! This module generates `sandbox-exec` profiles from a [`Policy`](crate::model::policy::Policy)
+//! and verifies that the Seatbelt sandbox is available on the current platform.
+//!
+//! # Security
+//!
+//! - Profiles use a deny-default strategy: `(deny default)` with explicit allows
+//! - Path characters are validated against a strict whitelist to prevent injection
+//! - Profile files are written with `0600` permissions (owner-only read/write)
+
 use crate::runner::{RunnerError, RunnerResult};
 use std::fmt::Write as FmtWrite;
 use std::fs::OpenOptions;
@@ -7,8 +18,10 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+/// Configuration for sandbox profile generation.
 #[derive(Clone, Debug)]
 pub struct SandboxConfig {
+    /// Absolute path where the sandbox profile will be written.
     pub profile_path: String,
 }
 
@@ -38,6 +51,14 @@ fn validate_seatbelt_path(s: &str) -> Result<(), RunnerError> {
     Ok(())
 }
 
+/// Check that Seatbelt (`sandbox-exec`) is available and functional.
+///
+/// Runs a minimal sandbox profile against `/usr/bin/true` to verify
+/// the sandbox subsystem works on this platform.
+///
+/// # Errors
+/// - `E_SANDBOX_UNAVAILABLE` if `sandbox-exec` is not found or fails
+/// - `E_POLICY_DENIED` if `sandbox-exec` exists but cannot execute
 pub fn ensure_sandbox_available() -> RunnerResult<()> {
     let status = Command::new("/usr/bin/sandbox-exec")
         .arg("-p")
@@ -60,6 +81,18 @@ pub fn ensure_sandbox_available() -> RunnerResult<()> {
     }
 }
 
+/// Generate and write a Seatbelt sandbox profile to disk.
+///
+/// The profile encodes the policy's filesystem, network, and executable
+/// allowlists as Seatbelt S-expressions. All paths are validated against
+/// a character whitelist before embedding.
+///
+/// On Unix, the file is created with mode `0600` to prevent other users
+/// from reading the sandbox rules.
+///
+/// # Errors
+/// - `E_POLICY_DENIED` if any path contains unsafe characters
+/// - `E_IO` if the file cannot be created or written
 pub fn write_profile(path: &Path, policy: &crate::model::policy::Policy) -> RunnerResult<()> {
     let content = build_profile(policy)?;
 

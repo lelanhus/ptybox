@@ -137,6 +137,21 @@ fn fixture_path(name: &str) -> String {
     }
 }
 
+/// Consume and validate the handshake line emitted on driver startup.
+fn consume_driver_handshake(lines: &mut impl Iterator<Item = std::io::Result<String>>) {
+    let line = lines.next().unwrap().unwrap();
+    let handshake: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        handshake["type"], "handshake",
+        "first line should be handshake"
+    );
+    assert_eq!(
+        handshake["protocol_version"].as_u64().unwrap(),
+        PROTOCOL_VERSION as u64,
+        "handshake protocol version should match"
+    );
+}
+
 /// Send a driver action and read the observation.
 fn driver_action(
     stdin: &mut impl Write,
@@ -349,6 +364,7 @@ fn resize_action_updates_terminal_size_via_driver() {
     let reader = std::io::BufReader::new(stdout);
 
     let mut lines = reader.lines();
+    consume_driver_handshake(&mut lines);
 
     // Send a wait action to get initial observation (driver produces output after action)
     let first_obs = driver_action(
@@ -604,6 +620,7 @@ fn driver_protocol_version_mismatch_is_rejected() {
     let reader = std::io::BufReader::new(stdout);
 
     let mut lines = reader.lines();
+    consume_driver_handshake(&mut lines);
 
     // Send action with wrong protocol version
     let request_id = "req-invalid-version";
@@ -670,6 +687,7 @@ fn driver_malformed_json_returns_protocol_error() {
     let reader = std::io::BufReader::new(stdout);
 
     let mut lines = reader.lines();
+    consume_driver_handshake(&mut lines);
 
     // Send malformed JSON
     writeln!(stdin, "{{not valid json").unwrap();
@@ -686,10 +704,13 @@ fn driver_malformed_json_returns_protocol_error() {
         .expect("malformed request should include error");
     assert_eq!(error.code, "E_PROTOCOL");
 
+    // With error recovery, single malformed JSON no longer kills the session.
+    // Close stdin so the driver exits gracefully.
+    drop(stdin);
     let status = child.wait().unwrap();
     assert!(
-        !status.success() || status.code() == Some(9),
-        "should exit with error code 9 (E_PROTOCOL)"
+        status.success(),
+        "driver should exit successfully after recoverable parse error"
     );
 }
 
@@ -721,6 +742,7 @@ fn driver_key_action_sends_input() {
     let reader = std::io::BufReader::new(stdout);
 
     let mut lines = reader.lines();
+    consume_driver_handshake(&mut lines);
 
     // Wait for initial ready
     let _first = driver_action(
@@ -779,6 +801,7 @@ fn driver_text_action_sends_input() {
     let reader = std::io::BufReader::new(stdout);
 
     let mut lines = reader.lines();
+    consume_driver_handshake(&mut lines);
 
     // Wait briefly
     let _first = driver_action(

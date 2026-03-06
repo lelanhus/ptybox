@@ -1,5 +1,7 @@
 # AI Agent Integration
 
+For a step-by-step walkthrough of building an agent from scratch, see the [Agent Tutorial](agent-tutorial.md).
+
 This guide covers using `ptybox driver` as an agent loop for TUIs.
 
 ## Why `driver`

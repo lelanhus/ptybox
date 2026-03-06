@@ -66,15 +66,15 @@ use crate::model::{Action, ActionType, Event, Observation, RunId, SessionId, Ter
 use crate::policy::apply_env_policy;
 use crate::runner::RunnerError;
 use crate::terminal::Terminal;
+use crate::util::pause_until;
 #[cfg(unix)]
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 #[cfg(unix)]
-use nix::sys::signal::{killpg, Signal};
+use nix::sys::signal::{kill, killpg, Signal};
 #[cfg(unix)]
 use nix::unistd::Pid;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Minimum terminal rows for resize validation.
@@ -158,13 +158,14 @@ impl PayloadExt for serde_json::Value {
 pub struct Session {
     run_id: RunId,
     session_id: SessionId,
-    terminal: Arc<Mutex<Terminal>>,
+    terminal: Terminal,
     master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     reader: Box<dyn Read + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     started_at: Instant,
     pending_utf8_tail: Vec<u8>,
+    read_buffer: Vec<u8>,
 }
 
 /// Configuration for spawning a session.
@@ -190,6 +191,10 @@ impl Session {
     /// # Errors
     /// Returns `RunnerError` with code `E_IO` if PTY creation or command spawn fails.
     pub fn spawn(config: SessionConfig) -> Result<Self, RunnerError> {
+        debug_assert!(config.size.rows > 0, "terminal rows must be positive");
+        debug_assert!(config.size.cols > 0, "terminal cols must be positive");
+        debug_assert!(!config.command.is_empty(), "command must not be empty");
+
         let system = native_pty_system();
         let pty_size = PtySize {
             rows: config.size.rows,
@@ -241,13 +246,14 @@ impl Session {
         Ok(Self {
             run_id: config.run_id,
             session_id: SessionId::new(),
-            terminal: Arc::new(Mutex::new(terminal)),
+            terminal,
             master: pair.master,
             writer,
             reader,
             child,
             started_at: Instant::now(),
             pending_utf8_tail: Vec::new(),
+            read_buffer: vec![0u8; 4096],
         })
     }
 
@@ -351,16 +357,10 @@ impl Session {
                         pixel_height: 0,
                     })
                     .map_err(|err| RunnerError::io("E_IO", "failed to resize pty", err))?;
-                let mut terminal = self.terminal.lock().map_err(|_| {
-                    RunnerError::internal(
-                        "E_INTERNAL",
-                        "terminal lock poisoned during resize operation",
-                    )
-                })?;
-                terminal.resize(TerminalSize { rows, cols });
+                self.terminal.resize(TerminalSize { rows, cols });
                 Ok(())
             }
-            ActionType::Wait => Ok(()),
+            ActionType::Wait | ActionType::Observe => Ok(()),
             ActionType::Terminate => self.terminate(),
         }
     }
@@ -378,15 +378,16 @@ impl Session {
         let mut saw_eof = false;
         let deadline = Instant::now() + timeout;
         loop {
-            let mut read_buffer = vec![0u8; 4096];
-            match self.reader.read(&mut read_buffer) {
+            match self.reader.read(&mut self.read_buffer) {
                 Ok(0) => {
                     saw_eof = true;
                     break;
                 }
                 Ok(count) => {
-                    read_buffer.truncate(count);
-                    total.extend_from_slice(&read_buffer);
+                    // read() guarantees count <= self.read_buffer.len()
+                    if let Some(slice) = self.read_buffer.get(..count) {
+                        total.extend_from_slice(slice);
+                    }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
@@ -403,11 +404,17 @@ impl Session {
 
         let transcript_delta = self.decode_transcript_delta(&total, saw_eof)?;
 
-        let mut terminal = self.terminal.lock().map_err(|_| {
-            RunnerError::internal("E_INTERNAL", "terminal lock poisoned during observation")
-        })?;
-        terminal.process_bytes(&total);
-        let snapshot = terminal.snapshot()?;
+        self.terminal.process_bytes(&total);
+        let snapshot = self.terminal.snapshot()?;
+        debug_assert!(
+            snapshot.rows > 0,
+            "snapshot rows must be positive after observe"
+        );
+        debug_assert!(
+            snapshot.cols > 0,
+            "snapshot cols must be positive after observe"
+        );
+
         let mut events = Vec::new();
         if !total.is_empty() {
             events.push(Event {
@@ -489,6 +496,16 @@ impl Session {
                         RunnerError::internal("E_INTERNAL", "utf-8 tail index out of bounds")
                     })?;
                     self.pending_utf8_tail.clear();
+                    // Max valid UTF-8 sequence is 4 bytes; if we have more pending
+                    // bytes, something is wrong — discard excess as invalid
+                    if pending_tail.len() > 4 {
+                        return Err(RunnerError::terminal_parse(
+                            "E_TERMINAL_PARSE",
+                            "pending UTF-8 tail exceeds maximum sequence length (4 bytes)",
+                            format!("pending_tail_len={}", pending_tail.len()),
+                            Some(valid_up_to),
+                        ));
+                    }
                     self.pending_utf8_tail.extend_from_slice(pending_tail);
                     Ok(prefix)
                 } else {
@@ -593,6 +610,18 @@ fn signal_process_group(pgid: Pid, signal: Signal) -> Result<(), RunnerError> {
     match killpg(pgid, signal) {
         // ESRCH means process already gone, which is fine
         Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+        // EPERM means process changed its group; fall back to direct kill
+        Err(nix::errno::Errno::EPERM) => {
+            // Try direct kill of the process (not the group)
+            match kill(pgid, signal) {
+                Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+                Err(err) => Err(RunnerError::io(
+                    "E_IO",
+                    "failed to signal process (EPERM on process group)",
+                    err,
+                )),
+            }
+        }
         Err(err) => Err(RunnerError::io(
             "E_IO",
             "failed to signal process group",
@@ -691,19 +720,6 @@ fn parse_ctrl_key(key: &str) -> Option<u8> {
         return None;
     }
     Some(ch - b'@')
-}
-
-fn pause_until(deadline: Instant, max_step: Duration) {
-    let now = Instant::now();
-    if now >= deadline {
-        return;
-    }
-    let remaining = deadline.saturating_duration_since(now);
-    if remaining <= Duration::from_micros(500) {
-        std::thread::yield_now();
-        return;
-    }
-    std::thread::sleep(remaining.min(max_step));
 }
 
 impl Session {

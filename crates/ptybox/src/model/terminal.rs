@@ -99,5 +99,12 @@ pub enum Color {
     /// 256-color extended palette (0-255).
     Ansi256(u8),
     /// 24-bit true color RGB.
-    Rgb { r: u8, g: u8, b: u8 },
+    Rgb {
+        /// Red component (0-255).
+        r: u8,
+        /// Green component (0-255).
+        g: u8,
+        /// Blue component (0-255).
+        b: u8,
+    },
 }

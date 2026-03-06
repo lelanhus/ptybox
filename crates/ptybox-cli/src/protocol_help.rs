@@ -182,7 +182,8 @@ fn generate_schemas() -> BTreeMap<String, SchemaHelp> {
     driver_input_fields.insert("action".to_string(), "Action object".to_string());
     driver_input_fields.insert(
         "timeout_ms".to_string(),
-        "u64 | null: optional per-action timeout override".to_string(),
+        "u64 | null: per-action timeout in ms (default: 200ms, 5000ms for wait actions)"
+            .to_string(),
     );
     schemas.insert(
         "DriverRequestV2".to_string(),
@@ -262,6 +263,14 @@ fn generate_schemas() -> BTreeMap<String, SchemaHelp> {
         "wait".to_string(),
         TypeVariant {
             payload: wait_payload,
+        },
+    );
+
+    let observe_payload = BTreeMap::new();
+    action_types.insert(
+        "observe".to_string(),
+        TypeVariant {
+            payload: observe_payload,
         },
     );
 
@@ -518,6 +527,31 @@ fn generate_error_codes() -> BTreeMap<String, ErrorCodeHelp> {
             common_causes: Some(vec![
                 "Screen content changed".to_string(),
                 "Timestamps differ (use --normalize)".to_string(),
+            ]),
+        },
+    );
+
+    codes.insert(
+        "E_CLI_INVALID_ARG".to_string(),
+        ErrorCodeHelp {
+            exit_code: 12,
+            description: "Invalid CLI argument.".to_string(),
+            common_causes: Some(vec![
+                "Missing required argument".to_string(),
+                "Invalid value for flag".to_string(),
+                "Conflicting options".to_string(),
+            ]),
+        },
+    );
+
+    codes.insert(
+        "E_INTERNAL".to_string(),
+        ErrorCodeHelp {
+            exit_code: 1,
+            description: "Internal error (unexpected condition).".to_string(),
+            common_causes: Some(vec![
+                "Bug in ptybox".to_string(),
+                "Unexpected system state".to_string(),
             ]),
         },
     );

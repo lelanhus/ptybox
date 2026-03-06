@@ -1,7 +1,16 @@
+//! Typed UUID identifiers for run, session, step, and snapshot entities.
+//!
+//! Each ID type is a newtype around [`Uuid`] with [`Display`](std::fmt::Display),
+//! `Serialize`/`Deserialize` (transparent), and `new()` constructor.
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use uuid::Uuid;
 
+/// Unique identifier for a run execution.
+///
+/// Generated once per `run_scenario` or `run_exec` invocation.
+/// Serializes as a plain UUID string (e.g., `"550e8400-e29b-41d4-a716-446655440000"`).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RunId(Uuid);
@@ -26,6 +35,9 @@ impl fmt::Display for RunId {
     }
 }
 
+/// Unique identifier for a PTY session.
+///
+/// Generated once per [`Session::spawn`](crate::session::Session::spawn) call.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SessionId(Uuid);
@@ -50,6 +62,9 @@ impl fmt::Display for SessionId {
     }
 }
 
+/// Unique identifier for a scenario step.
+///
+/// Generated for each step in a scenario or driver action sequence.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct StepId(Uuid);
@@ -74,6 +89,9 @@ impl fmt::Display for StepId {
     }
 }
 
+/// Unique identifier for a screen snapshot.
+///
+/// Generated each time a snapshot is captured from the terminal emulator.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SnapshotId(Uuid);

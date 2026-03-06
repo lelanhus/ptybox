@@ -119,7 +119,7 @@ Session::wait_for_exit(timeout: Duration) -> Result<Option<ExitStatus>, RunnerEr
 | `E_ASSERTION_FAILED` | 5 | `assertion_failed()` | Assertion did not pass |
 | `E_PROCESS_EXIT` | 6 | `process_exit()` | Process exited with non-zero code |
 | `E_TERMINAL_PARSE` | 7 | `terminal_parse()` | Terminal output parsing failed |
-| `E_PROTOCOL_VERSION` | 8 | `protocol()` | Protocol version mismatch |
+| `E_PROTOCOL_VERSION_MISMATCH` | 8 | `protocol()` | Protocol version mismatch |
 | `E_PROTOCOL` | 9 | `protocol()` | Generic protocol error |
 | `E_IO` | 10 | `io()` | I/O operation failed |
 | `E_REPLAY_MISMATCH` | 11 | `replay_mismatch()` | Replay comparison failed |

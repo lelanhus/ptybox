@@ -1,26 +1,57 @@
-//! Interactive driver loop for protocol v2 NDJSON clients.
+//! Interactive NDJSON driver loop for agent-controlled TUI sessions.
+//!
+//! This module implements the protocol v2 driver, which reads
+//! [`DriverRequestV2`](crate::model::driver::DriverRequestV2) messages from
+//! stdin and writes [`DriverResponseV2`](crate::model::driver::DriverResponseV2)
+//! responses to stdout. Each request sends one action and receives one
+//! observation with correlated `request_id`.
+//!
+//! # Key Types
+//!
+//! - [`DriverConfig`] — Runtime configuration (command, policy, artifacts)
+//!
+//! # Key Functions
+//!
+//! - [`run_driver`] — Start the stdin/stdout driver loop
+//!
+//! # Protocol Flow
+//!
+//! 1. Client sends a JSON line: `{"protocol_version":2, "request_id":"req-1", "action":{...}}`
+//! 2. Driver validates the request, performs the action, observes the terminal
+//! 3. Driver writes a JSON line response with the observation or error
+//! 4. Loop ends when client sends `terminate` or an error occurs
+//!
+//! # Artifacts
+//!
+//! When artifacts are enabled, the driver writes:
+//! - `driver-actions.jsonl` — log of all actions with timing
+//! - `scenario.json` — generated scenario from the action sequence
+//! - Standard artifacts (snapshots, transcript, events, run.json, checksums)
 
 use crate::artifacts::{ArtifactsWriter, ArtifactsWriterConfig};
-use crate::model::policy::{Policy, SandboxMode};
+use crate::model::policy::Policy;
 use crate::model::{
     driver::{
-        DriverActionMetrics, DriverActionRecord, DriverRequestV2, DriverResponseStatus,
-        DriverResponseV2,
+        BudgetStatus, DriverActionMetrics, DriverActionRecord, DriverRequestV2,
+        DriverResponseStatus, DriverResponseV2,
     },
-    Action, ActionType, ErrorInfo, ExitStatus, NormalizationRecord, RunConfig, RunId, RunResult,
-    RunStatus, Scenario, ScenarioMetadata, Step, StepId, StepResult, StepStatus, TerminalSize,
+    Action, ActionType, ErrorInfo, NormalizationRecord, RunConfig, RunId, RunResult, RunStatus,
+    Scenario, ScenarioMetadata, Step, StepId, StepResult, StepStatus, TerminalSize,
     NORMALIZATION_VERSION, PROTOCOL_VERSION, RUN_RESULT_VERSION, SCENARIO_VERSION,
 };
 use crate::policy::{
-    sandbox, validate_artifacts_dir, validate_artifacts_policy, validate_policy,
-    validate_write_access, EffectivePolicy,
+    validate_artifacts_dir, validate_artifacts_policy, validate_policy, validate_write_access,
+    EffectivePolicy,
 };
 use crate::runner::{compile_safe_regex, RunnerError, RunnerResult};
 use crate::session::{Session, SessionConfig};
+use crate::util::{
+    build_spawn_command, convert_exit_status, elapsed_ms, pause_until, resolve_artifacts_config,
+    snapshot_bytes, SandboxCleanupGuard,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Driver runtime configuration.
@@ -39,6 +70,23 @@ pub struct DriverConfig {
 }
 
 /// Run the protocol v2 driver loop against stdin/stdout.
+///
+/// Validates the full policy, spawns the child process under sandbox,
+/// then enters the request-response loop. The loop terminates when:
+/// - The client sends a `terminate` action
+/// - A protocol error occurs (invalid JSON, version mismatch)
+/// - A budget is exceeded (runtime, steps, output, snapshot)
+/// - The child process exits unexpectedly
+///
+/// # Errors
+///
+/// Returns [`RunnerError`] with codes including:
+/// - `E_POLICY_DENIED` — Policy validation failed before spawning
+/// - `E_PROTOCOL` — Invalid request JSON or payload
+/// - `E_PROTOCOL_VERSION_MISMATCH` — Unsupported protocol version
+/// - `E_TIMEOUT` — Budget exceeded (runtime, steps, output, snapshot, wait)
+/// - `E_PROCESS_EXIT` — Child process exited during a wait condition
+/// - `E_IO` — I/O failure on stdin/stdout or artifact writes
 pub fn run_driver(config: DriverConfig) -> RunnerResult<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -51,6 +99,8 @@ where
     R: BufRead,
     W: Write,
 {
+    const MAX_CONSECUTIVE_PARSE_ERRORS: u32 = 5;
+
     let DriverConfig {
         command,
         args,
@@ -108,12 +158,40 @@ where
         env: policy.env.clone(),
     })?;
 
+    // Emit handshake so agents know protocol capabilities upfront
+    let handshake = serde_json::json!({
+        "type": "handshake",
+        "protocol_version": PROTOCOL_VERSION,
+        "run_id": run_id.to_string(),
+        "terminal_size": {
+            "rows": TerminalSize::default().rows,
+            "cols": TerminalSize::default().cols,
+        },
+        "budgets": {
+            "max_steps": policy.budgets.max_steps,
+            "max_runtime_ms": policy.budgets.max_runtime_ms,
+            "max_output_bytes": policy.budgets.max_output_bytes,
+            "max_snapshot_bytes": policy.budgets.max_snapshot_bytes,
+            "max_wait_ms": policy.budgets.max_wait_ms,
+        },
+        "supported_actions": ["key", "text", "resize", "wait", "observe", "terminate"],
+        "supported_conditions": ["screen_contains", "screen_matches", "cursor_at", "process_exited"],
+    });
+    let handshake_str = serde_json::to_string(&handshake)
+        .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to serialize handshake", err))?;
+    writeln!(output, "{handshake_str}")
+        .map_err(|err| RunnerError::io("E_IO", "failed to write handshake", err))?;
+    output
+        .flush()
+        .map_err(|err| RunnerError::io("E_IO", "failed to flush handshake", err))?;
+
     let mut output_bytes: u64 = 0;
     let mut sequence: u64 = 0;
     let mut scenario_steps: Vec<Step> = Vec::new();
     let mut step_results: Vec<StepResult> = Vec::new();
     let mut final_observation = None;
     let mut final_error: Option<RunnerError> = None;
+    let mut consecutive_parse_errors: u32 = 0;
 
     for line in input.lines() {
         let line =
@@ -123,8 +201,12 @@ where
         }
 
         let request: DriverRequestV2 = match serde_json::from_str(&line) {
-            Ok(req) => req,
+            Ok(req) => {
+                consecutive_parse_errors = 0;
+                req
+            }
             Err(err) => {
+                consecutive_parse_errors += 1;
                 let response = DriverResponseV2 {
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "unknown".to_string(),
@@ -136,15 +218,26 @@ where
                         context: Some(serde_json::json!({
                             "parse_error": err.to_string(),
                             "received": line.chars().take(200).collect::<String>(),
-                            "hint": "request must be DriverRequestV2: protocol_version, request_id, action, timeout_ms?"
+                            "hint": "request must be DriverRequestV2: protocol_version, request_id, action, timeout_ms?",
+                            "consecutive_errors": consecutive_parse_errors,
+                            "max_consecutive_errors": MAX_CONSECUTIVE_PARSE_ERRORS
                         })),
                     }),
                     action_metrics: None,
+                    budget_status: None,
                 };
                 emit_driver_response(&mut output, &response)?;
-                let err = RunnerError::protocol("E_PROTOCOL", "invalid json request", None);
-                final_error = Some(err);
-                break;
+                if consecutive_parse_errors >= MAX_CONSECUTIVE_PARSE_ERRORS {
+                    final_error = Some(RunnerError::protocol(
+                        "E_PROTOCOL",
+                        format!(
+                            "too many consecutive parse errors ({consecutive_parse_errors}), terminating driver"
+                        ),
+                        None,
+                    ));
+                    break;
+                }
+                continue;
             }
         };
 
@@ -163,6 +256,7 @@ where
                     })),
                 }),
                 action_metrics: None,
+                budget_status: None,
             };
             emit_driver_response(&mut output, &response)?;
             final_error = Some(RunnerError::protocol_version_mismatch(
@@ -183,6 +277,12 @@ where
                     context: Some(serde_json::json!({ "max_steps": policy.budgets.max_steps })),
                 }),
                 action_metrics: None,
+                budget_status: Some(make_budget_status(
+                    sequence,
+                    &policy,
+                    &run_started,
+                    output_bytes,
+                )),
             };
             emit_driver_response(&mut output, &response)?;
             final_error = Some(RunnerError::timeout(
@@ -207,6 +307,12 @@ where
                     })),
                 }),
                 action_metrics: None,
+                budget_status: Some(make_budget_status(
+                    sequence,
+                    &policy,
+                    &run_started,
+                    output_bytes,
+                )),
             };
             emit_driver_response(&mut output, &response)?;
             final_error = Some(RunnerError::timeout(
@@ -217,10 +323,15 @@ where
             break;
         }
 
-        let timeout_ms = request.timeout_ms.unwrap_or(50);
+        let action = request.action.clone();
+        let default_timeout_ms = if matches!(action.action_type, ActionType::Wait) {
+            5000
+        } else {
+            200
+        };
+        let timeout_ms = request.timeout_ms.unwrap_or(default_timeout_ms);
         let started_at_ms = elapsed_ms(&run_started);
         let action_started = Instant::now();
-        let action = request.action.clone();
         let observation = match perform_action(
             &mut session,
             &action,
@@ -237,8 +348,14 @@ where
                     error: Some(err.to_error_info()),
                     action_metrics: Some(DriverActionMetrics {
                         sequence: sequence + 1,
-                        duration_ms: elapsed_ms_from(&action_started),
+                        duration_ms: elapsed_ms(&action_started),
                     }),
+                    budget_status: Some(make_budget_status(
+                        sequence,
+                        &policy,
+                        &run_started,
+                        output_bytes,
+                    )),
                 };
                 emit_driver_response(&mut output, &response)?;
                 final_error = Some(err);
@@ -266,8 +383,14 @@ where
                 error: Some(err.to_error_info()),
                 action_metrics: Some(DriverActionMetrics {
                     sequence: sequence + 1,
-                    duration_ms: elapsed_ms_from(&action_started),
+                    duration_ms: elapsed_ms(&action_started),
                 }),
+                budget_status: Some(make_budget_status(
+                    sequence,
+                    &policy,
+                    &run_started,
+                    output_bytes,
+                )),
             };
             emit_driver_response(&mut output, &response)?;
             final_error = Some(err);
@@ -289,8 +412,14 @@ where
                 error: Some(err.to_error_info()),
                 action_metrics: Some(DriverActionMetrics {
                     sequence: sequence + 1,
-                    duration_ms: elapsed_ms_from(&action_started),
+                    duration_ms: elapsed_ms(&action_started),
                 }),
+                budget_status: Some(make_budget_status(
+                    sequence,
+                    &policy,
+                    &run_started,
+                    output_bytes,
+                )),
             };
             emit_driver_response(&mut output, &response)?;
             final_error = Some(err);
@@ -299,7 +428,7 @@ where
 
         sequence += 1;
         let ended_at_ms = elapsed_ms(&run_started);
-        let duration_ms = elapsed_ms_from(&action_started);
+        let duration_ms = elapsed_ms(&action_started);
 
         let step_id = StepId::new();
         scenario_steps.push(Step {
@@ -351,6 +480,12 @@ where
                 sequence,
                 duration_ms,
             }),
+            budget_status: Some(make_budget_status(
+                sequence,
+                &policy,
+                &run_started,
+                output_bytes,
+            )),
         };
         emit_driver_response(&mut output, &response)?;
         final_observation = Some(observation);
@@ -458,6 +593,7 @@ fn perform_action(
 ) -> RunnerResult<crate::model::Observation> {
     match action.action_type {
         ActionType::Wait => wait_for_condition(session, action, timeout, policy),
+        ActionType::Observe => session.observe(timeout),
         ActionType::Terminate => {
             session.terminate()?;
             session.observe(Duration::from_millis(10))
@@ -490,13 +626,35 @@ fn wait_for_condition(
     let wait_timeout = timeout.min(max_wait);
     let deadline = Instant::now() + wait_timeout;
 
+    // Validate required fields before entering the polling loop
+    if wait_payload.condition.condition_type == "screen_contains"
+        && wait_payload
+            .condition
+            .payload
+            .get("text")
+            .and_then(Value::as_str)
+            .is_none()
+    {
+        return Err(RunnerError::protocol(
+            "E_PROTOCOL",
+            "screen_contains condition requires 'text' field",
+            Some(serde_json::json!({ "received_payload": wait_payload.condition.payload })),
+        ));
+    }
+
     let compiled_regex = if wait_payload.condition.condition_type == "screen_matches" {
         let pattern = wait_payload
             .condition
             .payload
             .get("pattern")
             .and_then(Value::as_str)
-            .unwrap_or("");
+            .ok_or_else(|| {
+                RunnerError::protocol(
+                    "E_PROTOCOL",
+                    "screen_matches condition requires 'pattern' field",
+                    Some(serde_json::json!({ "received_payload": wait_payload.condition.payload })),
+                )
+            })?;
         Some(compile_safe_regex(pattern)?)
     } else {
         None
@@ -542,6 +700,7 @@ fn condition_satisfied(
 ) -> RunnerResult<bool> {
     match condition.condition_type.as_str() {
         "screen_contains" => {
+            // text field is validated before the polling loop
             let text = condition
                 .payload
                 .get("text")
@@ -550,6 +709,7 @@ fn condition_satisfied(
             Ok(observation.screen.lines.join("\n").contains(text))
         }
         "screen_matches" => {
+            // pattern field is validated and compiled before the polling loop
             let screen_text = observation.screen.lines.join("\n");
             if let Some(re) = compiled_regex {
                 Ok(re.is_match(&screen_text))
@@ -564,26 +724,69 @@ fn condition_satisfied(
             }
         }
         "cursor_at" => {
-            #[allow(clippy::cast_possible_truncation)]
-            let row = condition
+            let row_u64 = condition
                 .payload
                 .get("row")
                 .and_then(Value::as_u64)
-                .unwrap_or(0) as u16;
-            #[allow(clippy::cast_possible_truncation)]
-            let col = condition
+                .ok_or_else(|| {
+                    RunnerError::protocol(
+                        "E_PROTOCOL",
+                        "cursor_at condition requires 'row' field",
+                        Some(serde_json::json!({ "received_payload": condition.payload })),
+                    )
+                })?;
+            let col_u64 = condition
                 .payload
                 .get("col")
                 .and_then(Value::as_u64)
-                .unwrap_or(0) as u16;
+                .ok_or_else(|| {
+                    RunnerError::protocol(
+                        "E_PROTOCOL",
+                        "cursor_at condition requires 'col' field",
+                        Some(serde_json::json!({ "received_payload": condition.payload })),
+                    )
+                })?;
+            let row = u16::try_from(row_u64).map_err(|_| {
+                RunnerError::protocol(
+                    "E_PROTOCOL",
+                    format!("row value {row_u64} exceeds maximum u16 value {}", u16::MAX),
+                    Some(serde_json::json!({ "received": row_u64, "max": u16::MAX })),
+                )
+            })?;
+            let col = u16::try_from(col_u64).map_err(|_| {
+                RunnerError::protocol(
+                    "E_PROTOCOL",
+                    format!("col value {col_u64} exceeds maximum u16 value {}", u16::MAX),
+                    Some(serde_json::json!({ "received": col_u64, "max": u16::MAX })),
+                )
+            })?;
             Ok(observation.screen.cursor.row == row && observation.screen.cursor.col == col)
         }
         "process_exited" => Ok(false),
         other => Err(RunnerError::protocol(
             "E_PROTOCOL",
             format!("unsupported wait condition '{other}'"),
-            None,
+            Some(serde_json::json!({
+                "received": other,
+                "supported_conditions": ["screen_contains", "screen_matches", "cursor_at", "process_exited"]
+            })),
         )),
+    }
+}
+
+fn make_budget_status(
+    sequence: u64,
+    policy: &Policy,
+    run_started: &Instant,
+    output_bytes: u64,
+) -> BudgetStatus {
+    BudgetStatus {
+        steps_used: sequence,
+        steps_max: policy.budgets.max_steps,
+        runtime_ms: elapsed_ms(run_started),
+        runtime_max_ms: policy.budgets.max_runtime_ms,
+        output_bytes_used: output_bytes,
+        output_bytes_max: policy.budgets.max_output_bytes,
     }
 }
 
@@ -596,129 +799,4 @@ fn emit_driver_response(output: &mut impl Write, response: &DriverResponseV2) ->
         .flush()
         .map_err(|err| RunnerError::io("E_IO", "failed to flush driver response", err))?;
     Ok(())
-}
-
-fn resolve_artifacts_config(
-    policy: &Policy,
-    options: Option<ArtifactsWriterConfig>,
-) -> Option<ArtifactsWriterConfig> {
-    if options.is_some() {
-        return options;
-    }
-    if policy.artifacts.enabled {
-        if let Some(dir) = policy.artifacts.dir.as_ref() {
-            return Some(ArtifactsWriterConfig {
-                dir: PathBuf::from(dir),
-                overwrite: policy.artifacts.overwrite,
-            });
-        }
-    }
-    None
-}
-
-fn elapsed_ms(started_at: &Instant) -> u64 {
-    #[allow(clippy::cast_possible_truncation)]
-    let value = started_at.elapsed().as_millis() as u64;
-    value
-}
-
-fn elapsed_ms_from(started_at: &Instant) -> u64 {
-    #[allow(clippy::cast_possible_truncation)]
-    let value = started_at.elapsed().as_millis() as u64;
-    value
-}
-
-fn snapshot_bytes(snapshot: &crate::model::ScreenSnapshot) -> RunnerResult<u64> {
-    let data = serde_json::to_vec(snapshot)
-        .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to encode snapshot", err))?;
-    Ok(data.len() as u64)
-}
-
-fn pause_until(deadline: Instant, max_step: Duration) {
-    let now = Instant::now();
-    if now >= deadline {
-        return;
-    }
-    let remaining = deadline.saturating_duration_since(now);
-    if remaining <= Duration::from_micros(500) {
-        std::thread::yield_now();
-        return;
-    }
-    let step = remaining.min(max_step);
-    std::thread::sleep(step);
-}
-
-fn convert_exit_status(
-    status: portable_pty::ExitStatus,
-    terminated_by_harness: bool,
-) -> ExitStatus {
-    #[allow(clippy::cast_possible_wrap)]
-    let code = status.exit_code() as i32;
-    ExitStatus {
-        success: status.success(),
-        exit_code: Some(code),
-        signal: None,
-        terminated_by_harness,
-    }
-}
-
-struct SpawnCommand {
-    command: String,
-    args: Vec<String>,
-    cleanup_path: Option<PathBuf>,
-}
-
-fn build_spawn_command(
-    policy: &Policy,
-    command: &str,
-    args: &[String],
-    artifacts_dir: Option<&PathBuf>,
-    run_id: RunId,
-) -> RunnerResult<SpawnCommand> {
-    match policy.sandbox {
-        SandboxMode::Seatbelt => {
-            let profile_path = if let Some(dir) = artifacts_dir {
-                dir.join("sandbox.sb")
-            } else {
-                std::env::temp_dir().join(format!("ptybox-{run_id}.sb"))
-            };
-            sandbox::write_profile(&profile_path, policy)?;
-            let mut sandbox_args = vec!["-f".to_string(), profile_path.display().to_string()];
-            sandbox_args.push(command.to_string());
-            sandbox_args.extend(args.iter().cloned());
-            let cleanup = if artifacts_dir.is_some() {
-                None
-            } else {
-                Some(profile_path)
-            };
-            Ok(SpawnCommand {
-                command: "/usr/bin/sandbox-exec".to_string(),
-                args: sandbox_args,
-                cleanup_path: cleanup,
-            })
-        }
-        SandboxMode::Disabled { .. } => Ok(SpawnCommand {
-            command: command.to_string(),
-            args: args.to_vec(),
-            cleanup_path: None,
-        }),
-    }
-}
-
-struct SandboxCleanupGuard {
-    path: Option<PathBuf>,
-}
-
-impl SandboxCleanupGuard {
-    fn new(path: Option<PathBuf>) -> Self {
-        Self { path }
-    }
-}
-
-impl Drop for SandboxCleanupGuard {
-    fn drop(&mut self) {
-        if let Some(path) = self.path.take() {
-            let _ = std::fs::remove_file(path);
-        }
-    }
 }

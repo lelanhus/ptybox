@@ -13,7 +13,7 @@ ptybox uses stable exit codes and error codes for programmatic handling.
 | 5 | E_ASSERTION_FAILED | Assertion did not pass |
 | 6 | E_PROCESS_EXIT | Target process exited non-zero |
 | 7 | E_TERMINAL_PARSE | Terminal output parsing failed |
-| 8 | E_PROTOCOL_VERSION | Incompatible protocol version |
+| 8 | E_PROTOCOL_VERSION_MISMATCH | Incompatible protocol version |
 | 9 | E_PROTOCOL | Malformed protocol message |
 | 10 | E_IO | I/O operation failed |
 | 11 | E_REPLAY_MISMATCH | Replay comparison failed |
@@ -82,7 +82,7 @@ Failed to parse terminal output.
 
 **Resolution:** Check target application output encoding.
 
-### E_PROTOCOL_VERSION (8)
+### E_PROTOCOL_VERSION_MISMATCH (8)
 
 Protocol version mismatch.
 

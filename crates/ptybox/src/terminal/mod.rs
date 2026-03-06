@@ -84,7 +84,14 @@ impl Terminal {
         let screen = self.parser.screen();
         let (rows, cols) = screen.size();
         let lines: Vec<String> = screen.rows(0, cols).collect();
+        debug_assert_eq!(
+            lines.len(),
+            usize::from(rows),
+            "snapshot line count must match terminal rows"
+        );
         let (row, col) = screen.cursor_position();
+        debug_assert!(row < rows, "cursor row must be within terminal bounds");
+        debug_assert!(col < cols, "cursor col must be within terminal bounds");
         let cursor = Cursor {
             row,
             col,

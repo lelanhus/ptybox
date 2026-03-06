@@ -31,6 +31,7 @@ indicatif = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 tokio = { workspace = true }
+ctrlc = { workspace = true }
 
 [dev-dependencies]
 serde_yml = { workspace = true }

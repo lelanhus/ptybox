@@ -34,6 +34,23 @@ pub struct DriverActionMetrics {
     pub duration_ms: u64,
 }
 
+/// Budget consumption status for proactive monitoring by agents.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BudgetStatus {
+    /// Steps consumed so far.
+    pub steps_used: u64,
+    /// Maximum allowed steps.
+    pub steps_max: u64,
+    /// Elapsed runtime in milliseconds.
+    pub runtime_ms: u64,
+    /// Maximum allowed runtime in milliseconds.
+    pub runtime_max_ms: u64,
+    /// Output bytes consumed so far.
+    pub output_bytes_used: u64,
+    /// Maximum allowed output bytes.
+    pub output_bytes_max: u64,
+}
+
 /// Driver response envelope for protocol v2.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DriverResponseV2 {
@@ -52,6 +69,9 @@ pub struct DriverResponseV2 {
     /// Per-action metrics.
     #[serde(default)]
     pub action_metrics: Option<DriverActionMetrics>,
+    /// Current budget consumption for proactive monitoring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_status: Option<BudgetStatus>,
 }
 
 /// Artifact record for driver actions.

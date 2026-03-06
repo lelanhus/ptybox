@@ -1,5 +1,7 @@
 # Sandbox Security
 
+For a comprehensive analysis of ptybox's security architecture, trust boundaries, and known limitations, see the [Threat Model](threat-model.md).
+
 ptybox enforces security through sandboxing and policy validation.
 
 ## Sandbox Backends

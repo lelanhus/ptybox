@@ -71,6 +71,7 @@ use crate::model::{
 };
 use crate::runner::{compile_safe_regex, run_scenario, RunnerError, RunnerOptions, RunnerResult};
 use crate::scenario::load_scenario_file;
+use crate::util::compute_checksum;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
@@ -100,26 +101,48 @@ fn load_json_file_optional<T: DeserializeOwned>(
     load_json_file(path, file_type).map(Some)
 }
 
+/// Options controlling replay comparison behavior.
+///
+/// Default options apply standard normalization filters (strip IDs,
+/// timestamps) for a reasonable balance between strictness and tolerance.
 #[derive(Clone, Debug, Default)]
 pub struct ReplayOptions {
+    /// Disable all normalization — require exact match.
     pub strict: bool,
+    /// Override the normalization filter set (from CLI or programmatic use).
+    /// When `None`, filters come from the policy or built-in defaults.
     pub filters: Option<Vec<NormalizationFilter>>,
+    /// Require `events.jsonl` to exist in both baseline and replay.
     pub require_events: bool,
+    /// Require `checksums.json` to exist for integrity validation.
     pub require_checksums: bool,
 }
 
+/// Explanation of resolved normalization settings for `--explain` mode.
+///
+/// Shows what normalization would be applied without running the replay.
 #[derive(Clone, Debug, Serialize)]
 pub struct ReplayExplanation {
+    /// Whether strict (no normalization) mode is active.
     pub strict: bool,
+    /// Active normalization filters.
     pub filters: Vec<NormalizationFilter>,
+    /// Active regex-based normalization rules.
     pub rules: Vec<NormalizationRule>,
+    /// Where the settings came from (CLI, policy, or defaults).
     pub source: NormalizationSource,
 }
 
+/// Summary report from a previous replay, loaded from artifact files.
+///
+/// Contains the replay summary and optional diff for failed comparisons.
 #[derive(Clone, Debug, Serialize)]
 pub struct ReplayReport {
+    /// Contents of `replay.json` (status, filters, mismatch info).
     pub replay: Value,
+    /// Contents of `diff.json` if the replay failed (detailed mismatch).
     pub diff: Option<Value>,
+    /// Path to the replay artifacts directory.
     pub dir: String,
 }
 
@@ -131,32 +154,56 @@ struct ReplaySettings {
     source: NormalizationSource,
 }
 
+/// Summary of a replay comparison, written to `replay.json`.
 #[derive(Clone, Debug, Serialize)]
 pub struct ReplaySummary {
+    /// Replay format version.
     pub replay_version: u32,
+    /// Outcome: `"passed"` or `"failed"`.
     pub status: String,
+    /// Where normalization settings came from.
     pub source: NormalizationSource,
+    /// Whether strict (exact) comparison was used.
     pub strict: bool,
+    /// Applied normalization filters.
     pub filters: Vec<NormalizationFilter>,
+    /// Applied regex normalization rules.
     pub rules: Vec<NormalizationRule>,
+    /// Mismatch details (present when `status` is `"failed"`).
     pub mismatch: Option<ReplayMismatch>,
 }
 
+/// Details about what differed between baseline and replay.
 #[derive(Clone, Debug, Serialize)]
 pub struct ReplayMismatch {
+    /// Category of mismatch: `"snapshot"`, `"transcript"`, `"run_result"`, `"events"`, `"checksum"`.
     pub kind: String,
+    /// Index of the first differing element (for sequential artifacts like snapshots).
     pub index: Option<usize>,
 }
 
+/// Detailed diff information written to `diff.json` on replay failure.
 #[derive(Clone, Debug, Serialize)]
 pub struct ReplayDiff {
+    /// Category of mismatch.
     pub kind: String,
+    /// Index of the first differing element.
     pub index: Option<usize>,
+    /// Error code (e.g., `"E_REPLAY_MISMATCH"`).
     pub code: String,
+    /// Human-readable error message.
     pub message: String,
+    /// Structured context with comparison details.
     pub context: Option<Value>,
 }
 
+/// Preview normalization settings without running a replay.
+///
+/// Resolves the effective settings from CLI options, policy, and defaults,
+/// and returns them for display (used by `--explain`).
+///
+/// # Errors
+/// Returns `E_IO` if the baseline `policy.json` cannot be read.
 pub fn explain_replay(
     artifacts_dir: &Path,
     options: ReplayOptions,
@@ -171,6 +218,14 @@ pub fn explain_replay(
     })
 }
 
+/// Read the most recent replay report from an artifacts directory.
+///
+/// Finds the latest `replay-*` subdirectory and loads `replay.json`
+/// and `diff.json` (if present).
+///
+/// # Errors
+/// - `E_IO` if no replay directory exists or files cannot be read
+/// - `E_PROTOCOL` if JSON parsing fails
 pub fn read_replay_report(artifacts_dir: &Path) -> RunnerResult<ReplayReport> {
     let replay_dir = latest_replay_dir(artifacts_dir)?;
     let replay_value: Value = load_json_file(&replay_dir.join("replay.json"), "replay.json")?;
@@ -183,11 +238,29 @@ pub fn read_replay_report(artifacts_dir: &Path) -> RunnerResult<ReplayReport> {
     })
 }
 
+/// Re-run a scenario from saved artifacts and compare against the baseline.
+///
+/// This is the primary replay entry point. It:
+/// 1. Validates baseline integrity (checksums, if present)
+/// 2. Loads the scenario and policy from baseline artifacts
+/// 3. Re-runs the scenario with a fresh artifacts directory
+/// 4. Compares snapshots, transcript, run results, and events
+/// 5. Writes `replay.json` summary and `diff.json` on mismatch
+///
+/// # Errors
+/// - `E_REPLAY_MISMATCH` if any comparison fails
+/// - `E_IO` if baseline artifacts are missing or unreadable
+/// - Any error from [`run_scenario`](crate::runner::run_scenario) during re-run
 pub fn replay_artifacts(artifacts_dir: &Path, options: ReplayOptions) -> RunnerResult<RunResult> {
     let policy = load_policy_from_artifacts(artifacts_dir)?;
     let policy_replay = policy.replay.clone();
     let mut scenario = load_scenario_from_artifacts(artifacts_dir)?;
     scenario.run.policy = crate::model::scenario::PolicyRef::Inline(Box::new(policy));
+
+    // Pre-flight: validate baseline integrity before the expensive re-run.
+    // This catches corrupt or truncated baselines early instead of producing
+    // inscrutable diffs after a full scenario execution.
+    validate_baseline_integrity(artifacts_dir, &options)?;
 
     let replay_dir = artifacts_dir.join(format!("replay-{}", RunId::new()));
     let runner_options = RunnerOptions {
@@ -200,6 +273,7 @@ pub fn replay_artifacts(artifacts_dir: &Path, options: ReplayOptions) -> RunnerR
     let run_result = run_scenario(scenario, runner_options)?;
 
     let settings = resolve_replay_settings(&policy_replay, &options);
+    validate_normalization_rules(&settings.rules)?;
     write_normalization_record(&replay_dir, &settings)?;
 
     let original_snapshots = load_snapshots(
@@ -435,7 +509,7 @@ fn load_snapshots(
         .collect();
     entries.sort();
 
-    let mut snapshots = Vec::new();
+    let mut snapshots = Vec::with_capacity(entries.len());
     for path in entries {
         let snapshot: ScreenSnapshot = load_json_file(&path, "snapshot")?;
         let value = serde_json::to_value(snapshot)
@@ -471,6 +545,28 @@ fn apply_rules_to_text(
         }
     }
     text
+}
+
+/// Validate all normalization rule regex patterns before comparison starts.
+/// Returns an error for the first invalid pattern found.
+fn validate_normalization_rules(rules: &[NormalizationRule]) -> RunnerResult<()> {
+    for rule in rules {
+        compile_safe_regex(&rule.pattern).map_err(|err| {
+            RunnerError::protocol(
+                "E_PROTOCOL",
+                format!(
+                    "invalid normalization regex pattern '{}': {}",
+                    rule.pattern, err
+                ),
+                Some(serde_json::json!({
+                    "pattern": rule.pattern,
+                    "target": format!("{:?}", rule.target),
+                    "replace": rule.replace
+                })),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn apply_rules_to_snapshot(mut value: Value, rules: &[NormalizationRule]) -> Value {
@@ -522,9 +618,24 @@ fn compare_transcript(
         apply_rules_to_text(original_text, rules, NormalizationRuleTarget::Transcript);
     let replay_text = apply_rules_to_text(replay_text, rules, NormalizationRuleTarget::Transcript);
     if original_text != replay_text {
+        // Find first differing position for debugging
+        let first_diff = original_text
+            .chars()
+            .zip(replay_text.chars())
+            .position(|(a, b)| a != b)
+            .unwrap_or(original_text.len().min(replay_text.len()));
+        let diff_line = original_text
+            .get(..first_diff)
+            .map_or(0, |s| s.lines().count());
         return Err(RunnerError::replay_mismatch(
             "transcript mismatch",
-            serde_json::json!({ "kind": "transcript" }),
+            serde_json::json!({
+                "kind": "transcript",
+                "first_diff_offset": first_diff,
+                "first_diff_line": diff_line,
+                "original_len": original_text.len(),
+                "replay_len": replay_text.len()
+            }),
         ));
     }
     Ok(())
@@ -541,9 +652,35 @@ fn compare_run_results(
     normalize_run_value(&mut original_value, filters, rules);
     normalize_run_value(&mut replay_value, filters, rules);
     if original_value != replay_value {
+        // Find the first differing top-level field for debugging
+        let first_diff_field = match (&original_value, &replay_value) {
+            (Value::Object(orig), Value::Object(repl)) => {
+                let mut diff = None;
+                for key in orig.keys() {
+                    if orig.get(key) != repl.get(key) {
+                        diff = Some(key.clone());
+                        break;
+                    }
+                }
+                // Check for keys only in replay
+                if diff.is_none() {
+                    for key in repl.keys() {
+                        if !orig.contains_key(key) {
+                            diff = Some(key.clone());
+                            break;
+                        }
+                    }
+                }
+                diff
+            }
+            _ => None,
+        };
         return Err(RunnerError::replay_mismatch(
             "run result mismatch",
-            serde_json::json!({ "kind": "run_result" }),
+            serde_json::json!({
+                "kind": "run_result",
+                "first_diff_field": first_diff_field,
+            }),
         ));
     }
     Ok(())
@@ -739,6 +876,48 @@ fn load_events_if_present(
     Ok(Some(events))
 }
 
+/// Pre-flight validation of baseline artifact integrity.
+///
+/// If `checksums.json` exists, verifies all listed files match their recorded
+/// checksums. If missing, emits a tracing warning (the baseline may have been
+/// created by an older version that didn't produce checksums).
+fn validate_baseline_integrity(artifacts_dir: &Path, options: &ReplayOptions) -> RunnerResult<()> {
+    let checksums_path = artifacts_dir.join("checksums.json");
+    if !checksums_path.exists() {
+        if options.require_checksums {
+            return Err(RunnerError::replay_mismatch(
+                "baseline missing checksums.json",
+                serde_json::json!({ "kind": "checksum", "path": "checksums.json" }),
+            ));
+        }
+        tracing::warn!("baseline has no checksums.json — skipping integrity check");
+        return Ok(());
+    }
+    let checksums: std::collections::BTreeMap<String, String> =
+        load_json_file(&checksums_path, "baseline checksums.json")?;
+    for (relative, expected) in &checksums {
+        let file_path = artifacts_dir.join(relative);
+        if !file_path.exists() {
+            // Missing files are handled by the comparison phase with
+            // domain-specific errors (e.g., "events missing").
+            continue;
+        }
+        let actual = compute_checksum(&file_path)?;
+        if actual != *expected {
+            return Err(RunnerError::replay_mismatch(
+                "baseline artifact corrupted",
+                serde_json::json!({
+                    "kind": "checksum",
+                    "path": relative,
+                    "expected": expected,
+                    "actual": actual
+                }),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_checksums(dir: &Path, require: bool) -> RunnerResult<()> {
     let path = dir.join("checksums.json");
     let checksums: Option<std::collections::BTreeMap<String, String>> =
@@ -776,11 +955,6 @@ fn validate_checksums(dir: &Path, require: bool) -> RunnerResult<()> {
     Ok(())
 }
 
-fn compute_checksum(path: &Path) -> RunnerResult<String> {
-    let data = fs::read(path).map_err(|err| RunnerError::io("E_IO", "failed to read file", err))?;
-    Ok(format!("{:016x}", fnv1a_hash(&data)))
-}
-
 fn update_checksum_entry(dir: &Path, relative: &str) -> RunnerResult<()> {
     let path = dir.join("checksums.json");
     let Some(mut checksums) = load_json_file_optional::<std::collections::BTreeMap<String, String>>(
@@ -797,19 +971,6 @@ fn update_checksum_entry(dir: &Path, relative: &str) -> RunnerResult<()> {
     fs::write(&path, data)
         .map_err(|err| RunnerError::io("E_IO", "failed to write checksums", err))?;
     Ok(())
-}
-
-fn fnv1a_hash(data: &[u8]) -> u64 {
-    // FNV-1a constants (64-bit)
-    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0100_0000_01b3;
-
-    let mut hash: u64 = FNV_OFFSET_BASIS;
-    for byte in data {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
 }
 
 fn normalize_observation_value(

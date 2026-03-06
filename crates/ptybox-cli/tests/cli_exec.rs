@@ -41,6 +41,20 @@ fn write_policy(path: &Path, policy: &Policy) {
     fs::write(path, data).unwrap();
 }
 
+/// Parse a `DriverResponseV2` from stdout that contains a handshake line followed by the response.
+/// Skips the first line (handshake) and parses the last non-empty line as the response.
+fn parse_driver_response(stdout: &[u8]) -> DriverResponseV2 {
+    let text = String::from_utf8_lossy(stdout);
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(
+        lines.len() >= 2,
+        "expected handshake + response, got {} lines: {text}",
+        lines.len()
+    );
+    // First line is handshake, last line is the response
+    serde_json::from_str(lines[lines.len() - 1]).unwrap()
+}
+
 fn read_events_transcript(dir: &Path) -> String {
     let data = fs::read_to_string(dir.join("events.jsonl")).unwrap();
     let mut transcript = String::new();
@@ -410,7 +424,7 @@ fn driver_protocol_version_mismatch_is_reported() {
     }
 
     let output = child.wait_with_output().unwrap();
-    let response: DriverResponseV2 = serde_json::from_slice(&output.stdout).unwrap();
+    let response: DriverResponseV2 = parse_driver_response(&output.stdout);
     assert_eq!(response.status, DriverResponseStatus::Error);
     let err = response.error.expect("error should be present");
     assert_eq!(err.code, "E_PROTOCOL_VERSION_MISMATCH");
@@ -460,7 +474,7 @@ fn driver_protocol_version_ok_returns_observation() {
     }
 
     let output = child.wait_with_output().unwrap();
-    let response: DriverResponseV2 = serde_json::from_slice(&output.stdout).unwrap();
+    let response: DriverResponseV2 = parse_driver_response(&output.stdout);
     assert_eq!(response.status, DriverResponseStatus::Ok);
     let observation: Observation = response.observation.expect("observation should be present");
     assert_eq!(
@@ -761,7 +775,10 @@ fn driver_rejects_malformed_json() {
     }
 
     let output = child.wait_with_output().unwrap();
-    let response: DriverResponseV2 = serde_json::from_slice(&output.stdout).unwrap();
+    // With error recovery, single malformed JSON no longer kills the session;
+    // it continues and exits successfully when stdin closes.
+    assert!(output.status.success());
+    let response: DriverResponseV2 = parse_driver_response(&output.stdout);
     let err = response.error.expect("error should be present");
     assert_eq!(err.code, "E_PROTOCOL");
 }
@@ -801,7 +818,7 @@ fn driver_strict_write_with_ack_allows_start() {
     }
 
     let output = child.wait_with_output().unwrap();
-    let response: DriverResponseV2 = serde_json::from_slice(&output.stdout).unwrap();
+    let response: DriverResponseV2 = parse_driver_response(&output.stdout);
     assert_eq!(response.status, DriverResponseStatus::Ok);
     let observation: Observation = response.observation.expect("observation should be present");
     assert_eq!(

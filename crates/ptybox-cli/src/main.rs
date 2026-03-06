@@ -9,6 +9,7 @@
 #![allow(clippy::exit)] // CLI uses exit codes
 #![allow(clippy::unreachable)] // Used for exhaustive enum matching
 #![allow(clippy::fn_params_excessive_bools)] // CLI flags are naturally bools
+#![allow(deprecated)] // Legacy RunnerError constructors during migration
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
@@ -22,6 +23,7 @@ use ptybox::runner::{
 use ptybox::scenario::load_policy_file;
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Color output mode
@@ -259,8 +261,26 @@ fn configure_colors(mode: ColorMode) {
     }
 }
 
+/// Global flag set by the signal handler.
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+/// Install a signal handler for SIGINT/SIGTERM that sets a flag
+/// instead of immediately terminating the process.
+fn install_signal_handler() {
+    ctrlc::set_handler(move || {
+        if INTERRUPTED.swap(true, Ordering::SeqCst) {
+            // Second signal: force exit
+            std::process::exit(130);
+        }
+        // First signal: set flag for graceful shutdown
+        // The driver/runner loops check INTERRUPTED and emit JSON error
+    })
+    .ok(); // Ignore error if handler already set (e.g., in tests)
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
+    install_signal_handler();
     let cli = Cli::parse();
     configure_colors(cli.color);
     match cli.command {
@@ -716,6 +736,7 @@ enum NormalizeFilterArg {
     StepTimestamps,
     ObservationTimestamp,
     SessionId,
+    Events,
 }
 
 impl From<NormalizeFilterArg> for ptybox::model::NormalizationFilter {
@@ -731,6 +752,7 @@ impl From<NormalizeFilterArg> for ptybox::model::NormalizationFilter {
             NormalizeFilterArg::StepTimestamps => Self::StepTimestamps,
             NormalizeFilterArg::ObservationTimestamp => Self::ObservationTimestamp,
             NormalizeFilterArg::SessionId => Self::SessionId,
+            NormalizeFilterArg::Events => Self::Events,
         }
     }
 }

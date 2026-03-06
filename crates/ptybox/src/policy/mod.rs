@@ -1,3 +1,36 @@
+//! Deny-by-default policy validation and sandbox profile generation.
+//!
+//! This module enforces the security policy before any process is spawned.
+//! All validation happens pre-run: if any check fails, execution is refused
+//! with `E_POLICY_DENIED` and a structured error explaining the fix.
+//!
+//! # Key Types
+//!
+//! - [`EffectivePolicy`] — Wraps a [`Policy`] with validation methods
+//! - [`PolicyExplanation`] — Result of `--explain-policy` dry-run
+//!
+//! # Key Functions
+//!
+//! - [`validate_policy`] — Full policy validation (version, sandbox, network, fs, env, artifacts)
+//! - [`validate_fs_policy`] — Filesystem path validation (absolute, no roots, no symlinks)
+//! - [`validate_network_policy`] — Network access and enforcement checks
+//! - [`validate_sandbox_mode`] — Sandbox availability and acknowledgement
+//! - [`validate_env_policy`] — Environment variable allowlist consistency
+//! - [`validate_artifacts_policy`] — Artifacts directory within write allowlist
+//! - [`validate_write_access`] — Write acknowledgement for strict-write mode
+//! - [`explain_policy_for_run_config`] — Dry-run all checks without executing
+//! - [`apply_env_policy`] — Apply environment policy to a command builder
+//!
+//! # Security Controls
+//!
+//! - All paths must be absolute
+//! - System roots (`/`, `/System`, `/Library`, `/Users`, etc.) are blocked
+//! - Home directory cannot be allowlisted
+//! - Symlinks are rejected (except well-known OS symlinks like `/tmp`)
+//! - Dangerous environment variables (`LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, etc.) are blocked
+//! - Shell execution is detected and blocked unless explicitly allowed
+//! - Path traversal via `..` is normalized before validation
+
 pub mod sandbox;
 
 use crate::model::policy::{
@@ -105,22 +138,42 @@ fn validate_path_not_symlink(path: &Path) -> Result<(), RunnerError> {
     Ok(())
 }
 
+/// A validated policy wrapper with methods for run-config and action validation.
+///
+/// Wraps a [`Policy`] and provides methods to check whether a given
+/// run configuration or action is allowed under the policy.
 #[derive(Clone, Debug)]
 pub struct EffectivePolicy {
+    /// The underlying policy.
     pub policy: Policy,
 }
 
+/// Result of a policy dry-run via `--explain-policy`.
+///
+/// Contains whether the run would be allowed and any validation errors
+/// that would prevent execution.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PolicyExplanation {
+    /// Whether the run config would pass all policy checks.
     pub allowed: bool,
+    /// Validation errors (empty when `allowed` is true).
     pub errors: Vec<crate::model::ErrorInfo>,
 }
 
 impl EffectivePolicy {
+    /// Create an effective policy from a validated [`Policy`].
     pub fn new(policy: Policy) -> Self {
         Self { policy }
     }
 
+    /// Validate a run configuration against this policy.
+    ///
+    /// Checks that the command is in the executable allowlist, uses an
+    /// absolute path, is not a shell, and that the working directory
+    /// is within allowed paths.
+    ///
+    /// # Errors
+    /// Returns `E_POLICY_DENIED` with structured context describing the fix.
     pub fn validate_run_config(&self, run: &RunConfig) -> Result<(), RunnerError> {
         let exec = &self.policy.exec;
         if exec.allowed_executables.is_empty() {
@@ -216,6 +269,13 @@ impl EffectivePolicy {
         Ok(())
     }
 
+    /// Validate that an action is allowed by the policy.
+    ///
+    /// Currently permits all action types; reserved for future per-action
+    /// restrictions.
+    ///
+    /// # Errors
+    /// Returns `E_POLICY_DENIED` if the action is disallowed.
     pub fn validate_action(&self, action: &Action) -> Result<(), RunnerError> {
         if matches!(action.action_type, ActionType::Terminate) {
             return Ok(());
@@ -226,6 +286,13 @@ impl EffectivePolicy {
         Ok(())
     }
 
+    /// Apply environment variable policy to a command builder.
+    ///
+    /// Clears the environment, then selectively inherits and sets
+    /// variables according to the policy allowlist.
+    ///
+    /// # Errors
+    /// Returns `E_POLICY_DENIED` if a dangerous environment variable is in the allowlist.
     pub fn apply_env_policy(
         &self,
         cmd: &mut portable_pty::CommandBuilder,
@@ -234,6 +301,10 @@ impl EffectivePolicy {
     }
 }
 
+/// Dry-run all policy checks and return a structured explanation.
+///
+/// Runs every validation without executing anything. Used by
+/// `--explain-policy` to show what would pass or fail.
 pub fn explain_policy_for_run_config(policy: &Policy, run: &RunConfig) -> PolicyExplanation {
     let mut errors = Vec::new();
     if let Err(err) = validate_policy_version(policy) {
@@ -268,6 +339,10 @@ pub fn explain_policy_for_run_config(policy: &Policy, run: &RunConfig) -> Policy
     }
 }
 
+/// Validate that the policy version matches the current [`POLICY_VERSION`].
+///
+/// # Errors
+/// Returns `E_PROTOCOL` if the version does not match.
 pub fn validate_policy_version(policy: &Policy) -> Result<(), RunnerError> {
     if policy.policy_version != POLICY_VERSION {
         return Err(RunnerError::protocol(
@@ -298,6 +373,10 @@ fn path_allowed(path: &str, allowed_read: &[String], allowed_write: &[String]) -
         })
 }
 
+/// Validate that shell execution is allowed by the exec policy.
+///
+/// # Errors
+/// Returns `E_POLICY_DENIED` if `allow_shell` is false.
 pub fn validate_shell_policy(exec: &ExecPolicy) -> Result<(), RunnerError> {
     if exec.allow_shell {
         Ok(())
@@ -310,6 +389,13 @@ pub fn validate_shell_policy(exec: &ExecPolicy) -> Result<(), RunnerError> {
     }
 }
 
+/// Validate network access policy and enforcement capability.
+///
+/// Checks that network access has proper acknowledgement and that
+/// network policy can actually be enforced (requires sandbox).
+///
+/// # Errors
+/// Returns `E_POLICY_DENIED` if acknowledgements are missing.
 pub fn validate_network_policy(policy: &Policy) -> Result<(), RunnerError> {
     // Check if network is enabled without acknowledgement
     if let NetworkPolicy::Enabled { ack } = &policy.network {
@@ -340,6 +426,11 @@ pub fn validate_network_policy(policy: &Policy) -> Result<(), RunnerError> {
     Ok(())
 }
 
+/// Validate artifacts policy: directory must be set when artifacts are enabled.
+///
+/// # Errors
+/// Returns `E_POLICY_DENIED` if artifacts are enabled without a directory,
+/// or if the directory is outside the write allowlist.
 pub fn validate_artifacts_policy(policy: &Policy) -> Result<(), RunnerError> {
     if policy.artifacts.enabled {
         let dir = policy.artifacts.dir.as_ref().ok_or_else(|| {
@@ -359,6 +450,13 @@ pub fn validate_artifacts_policy(policy: &Policy) -> Result<(), RunnerError> {
     Ok(())
 }
 
+/// Validate write access acknowledgement in strict-write mode.
+///
+/// When `fs.strict_write` is true, any operation requiring write access
+/// (sandbox profile, artifacts) must be explicitly acknowledged.
+///
+/// # Errors
+/// Returns `E_POLICY_DENIED` if write acknowledgement is missing.
 pub fn validate_write_access(
     policy: &Policy,
     artifacts_dir: Option<&Path>,
@@ -389,6 +487,11 @@ pub fn validate_write_access(
     ))
 }
 
+/// Validate sandbox mode: check availability (Seatbelt) or acknowledgement (Disabled).
+///
+/// # Errors
+/// - `E_SANDBOX_UNAVAILABLE` if Seatbelt is not available on this platform
+/// - `E_POLICY_DENIED` if sandbox is disabled without acknowledgement
 pub fn validate_sandbox_mode(mode: &SandboxMode) -> Result<(), RunnerError> {
     match mode {
         SandboxMode::Seatbelt => {
@@ -414,6 +517,12 @@ pub fn validate_sandbox_mode(mode: &SandboxMode) -> Result<(), RunnerError> {
     }
 }
 
+/// Validate environment variable policy consistency.
+///
+/// Ensures every key in `env.set` also appears in the `env.allowlist`.
+///
+/// # Errors
+/// Returns `E_POLICY_DENIED` if a set variable is not in the allowlist.
 pub fn validate_env_policy(env: &EnvPolicy) -> Result<(), RunnerError> {
     for key in env.set.keys() {
         if !env.allowlist.iter().any(|allowed| allowed == key) {
@@ -431,6 +540,13 @@ pub fn validate_env_policy(env: &EnvPolicy) -> Result<(), RunnerError> {
     Ok(())
 }
 
+/// Run all policy validations in order.
+///
+/// Equivalent to calling each `validate_*` function. Returns the first
+/// error encountered.
+///
+/// # Errors
+/// Returns the first validation error (see individual validators).
 pub fn validate_policy(policy: &Policy) -> Result<(), RunnerError> {
     validate_policy_version(policy)?;
     validate_sandbox_mode(&policy.sandbox)?;
@@ -442,6 +558,15 @@ pub fn validate_policy(policy: &Policy) -> Result<(), RunnerError> {
     Ok(())
 }
 
+/// Apply the environment policy to a command builder.
+///
+/// Clears the inherited environment, then selectively re-adds variables
+/// from the allowlist (when `inherit` is true) and explicit `set` values.
+/// Dangerous environment variables (e.g., `LD_PRELOAD`) are blocked
+/// regardless of the allowlist.
+///
+/// # Errors
+/// Returns `E_POLICY_DENIED` if a dangerous variable is in the allowlist or set map.
 pub fn apply_env_policy(
     env_policy: &EnvPolicy,
     cmd: &mut portable_pty::CommandBuilder,
@@ -525,6 +650,14 @@ fn is_shell_command(command: &str, args: &[String]) -> bool {
 /// Blocked filesystem roots for security. Paths under these roots cannot be allowlisted.
 const BLOCKED_FS_ROOTS: &[&str] = &["/", "/System", "/Library", "/Users", "/private", "/Volumes"];
 
+/// Validate filesystem policy: absolute paths, no dangerous roots, no symlinks.
+///
+/// Checks every path in `allowed_read`, `allowed_write`, and `working_dir`.
+/// Rejects the root directory, home directory, and system paths
+/// (`/System`, `/Library`, `/Users`, `/private`, `/Volumes`).
+///
+/// # Errors
+/// Returns `E_POLICY_DENIED` with structured context identifying the offending path.
 pub fn validate_fs_policy(fs: &FsPolicy) -> Result<(), RunnerError> {
     let home_dir = std::env::var_os("HOME").map(PathBuf::from);
     let denied_roots: [(&Path, &str); 5] = [
@@ -600,6 +733,10 @@ pub fn validate_fs_policy(fs: &FsPolicy) -> Result<(), RunnerError> {
     Ok(())
 }
 
+/// Validate that the artifacts directory is absolute and within write allowlists.
+///
+/// # Errors
+/// Returns `E_POLICY_DENIED` if the path is relative or not in `allowed_write`.
 pub fn validate_artifacts_dir(dir: &Path, fs: &FsPolicy) -> Result<(), RunnerError> {
     if !dir.is_absolute() {
         return Err(RunnerError::policy_denied(

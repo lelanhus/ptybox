@@ -18,6 +18,7 @@
 //! | `screen_empty` | All screen lines are whitespace | (none) |
 //! | `cursor_visible` | Cursor is visible | (none) |
 //! | `cursor_hidden` | Cursor is hidden | (none) |
+//! | `exit_code` | Process exited with code | `code` |
 //!
 //! # Example
 //!
@@ -63,7 +64,8 @@
 //! characters to prevent `ReDoS` attacks.
 
 use crate::model::scenario::Assertion;
-use crate::model::{Observation, ScreenSnapshot, MAX_REGEX_PATTERN_LEN};
+use crate::model::{ExitStatus, Observation, ScreenSnapshot, MAX_REGEX_PATTERN_LEN};
+use crate::runner::compile_safe_regex;
 use serde_json::Value;
 
 // =============================================================================
@@ -80,10 +82,24 @@ type AssertionResult = (bool, Option<String>, Option<Value>);
 /// Evaluate an assertion against an observation.
 ///
 /// Returns a tuple of (passed, error message, context).
+/// For `exit_code` assertions, use [`evaluate_with_exit_status`] instead.
 #[must_use]
 pub fn evaluate(
     observation: &Observation,
     assertion: &Assertion,
+) -> (bool, Option<String>, Option<Value>) {
+    evaluate_with_exit_status(observation, assertion, None)
+}
+
+/// Evaluate an assertion against an observation with optional exit status context.
+///
+/// When `exit_status` is provided, `exit_code` assertions can be evaluated.
+/// Without it, `exit_code` assertions fail with "process has not exited".
+#[must_use]
+pub fn evaluate_with_exit_status(
+    observation: &Observation,
+    assertion: &Assertion,
+    exit_status: Option<&ExitStatus>,
 ) -> (bool, Option<String>, Option<Value>) {
     let screen_text = observation.screen.lines.join("\n");
 
@@ -98,7 +114,20 @@ pub fn evaluate(
         "screen_empty" => eval_screen_empty(observation),
         "cursor_visible" => eval_cursor_visible(observation),
         "cursor_hidden" => eval_cursor_hidden(observation),
-        _ => (false, Some("unsupported assertion".to_string()), None),
+        "exit_code" => eval_exit_code(assertion, exit_status),
+        other => (
+            false,
+            Some(format!("unsupported assertion type '{other}'")),
+            Some(serde_json::json!({
+                "received": other,
+                "supported_types": [
+                    "screen_contains", "regex_match", "cursor_at",
+                    "line_equals", "line_contains", "line_matches",
+                    "not_contains", "screen_empty", "cursor_visible",
+                    "cursor_hidden", "exit_code"
+                ]
+            })),
+        ),
     }
 }
 
@@ -107,7 +136,10 @@ pub fn evaluate(
 // =============================================================================
 
 fn eval_screen_contains(screen_text: &str, assertion: &Assertion) -> AssertionResult {
-    let text = get_text_field(assertion);
+    let text = match get_text_field(assertion) {
+        Ok(t) => t,
+        Err(result) => return result,
+    };
     let passed = screen_text.contains(text);
     let message = if passed {
         None
@@ -118,13 +150,16 @@ fn eval_screen_contains(screen_text: &str, assertion: &Assertion) -> AssertionRe
 }
 
 fn eval_regex_match(screen_text: &str, assertion: &Assertion) -> AssertionResult {
-    let pattern = get_pattern_field(assertion);
+    let pattern = match get_pattern_field(assertion) {
+        Ok(p) => p,
+        Err(result) => return result,
+    };
 
     if let Some(err) = validate_pattern_length(pattern) {
         return err;
     }
 
-    match regex::Regex::new(pattern) {
+    match compile_safe_regex(pattern) {
         Ok(re) => {
             let passed = re.is_match(screen_text);
             let message = if passed {
@@ -134,7 +169,11 @@ fn eval_regex_match(screen_text: &str, assertion: &Assertion) -> AssertionResult
             };
             (passed, message, None)
         }
-        Err(err) => regex_error(err),
+        Err(err) => (
+            false,
+            Some("invalid regex".to_string()),
+            Some(Value::String(err.to_string())),
+        ),
     }
 }
 
@@ -168,8 +207,14 @@ fn eval_cursor_at(observation: &Observation, assertion: &Assertion) -> Assertion
 }
 
 fn eval_line_equals(screen: &ScreenSnapshot, assertion: &Assertion) -> AssertionResult {
-    let line_u64 = get_line_field(assertion);
-    let expected = get_text_field(assertion);
+    let line_u64 = match get_line_field(assertion) {
+        Ok(l) => l,
+        Err(result) => return result,
+    };
+    let expected = match get_text_field(assertion) {
+        Ok(t) => t,
+        Err(result) => return result,
+    };
 
     match get_screen_line(screen, line_u64) {
         Ok(actual) => {
@@ -188,8 +233,14 @@ fn eval_line_equals(screen: &ScreenSnapshot, assertion: &Assertion) -> Assertion
 }
 
 fn eval_line_contains(screen: &ScreenSnapshot, assertion: &Assertion) -> AssertionResult {
-    let line_u64 = get_line_field(assertion);
-    let text = get_text_field(assertion);
+    let line_u64 = match get_line_field(assertion) {
+        Ok(l) => l,
+        Err(result) => return result,
+    };
+    let text = match get_text_field(assertion) {
+        Ok(t) => t,
+        Err(result) => return result,
+    };
 
     match get_screen_line(screen, line_u64) {
         Ok(actual) => {
@@ -206,15 +257,21 @@ fn eval_line_contains(screen: &ScreenSnapshot, assertion: &Assertion) -> Asserti
 }
 
 fn eval_line_matches(screen: &ScreenSnapshot, assertion: &Assertion) -> AssertionResult {
-    let line_u64 = get_line_field(assertion);
-    let pattern = get_pattern_field(assertion);
+    let line_u64 = match get_line_field(assertion) {
+        Ok(l) => l,
+        Err(result) => return result,
+    };
+    let pattern = match get_pattern_field(assertion) {
+        Ok(p) => p,
+        Err(result) => return result,
+    };
 
     if let Some(err) = validate_pattern_length(pattern) {
         return err;
     }
 
     match get_screen_line(screen, line_u64) {
-        Ok(actual) => match regex::Regex::new(pattern) {
+        Ok(actual) => match compile_safe_regex(pattern) {
             Ok(re) => {
                 let passed = re.is_match(actual);
                 let message = if passed {
@@ -224,14 +281,21 @@ fn eval_line_matches(screen: &ScreenSnapshot, assertion: &Assertion) -> Assertio
                 };
                 (passed, message, None)
             }
-            Err(err) => regex_error(err),
+            Err(err) => (
+                false,
+                Some("invalid regex".to_string()),
+                Some(Value::String(err.to_string())),
+            ),
         },
         Err(result) => result,
     }
 }
 
 fn eval_not_contains(screen_text: &str, assertion: &Assertion) -> AssertionResult {
-    let text = get_text_field(assertion);
+    let text = match get_text_field(assertion) {
+        Ok(t) => t,
+        Err(result) => return result,
+    };
     let passed = !screen_text.contains(text);
     let message = if passed {
         None
@@ -275,32 +339,98 @@ fn eval_cursor_hidden(observation: &Observation) -> AssertionResult {
     (passed, message, None)
 }
 
+fn eval_exit_code(assertion: &Assertion, exit_status: Option<&ExitStatus>) -> AssertionResult {
+    let expected_code = assertion
+        .payload
+        .get("code")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+
+    #[allow(clippy::cast_possible_truncation)]
+    let expected = expected_code as i32;
+
+    let Some(status) = exit_status else {
+        return (false, Some("process has not exited".to_string()), None);
+    };
+
+    let Some(actual) = status.exit_code else {
+        return (
+            false,
+            Some("process was killed by signal, no exit code".to_string()),
+            status.signal.map(|sig| serde_json::json!({"signal": sig})),
+        );
+    };
+
+    let passed = actual == expected;
+    let message = if passed {
+        None
+    } else {
+        Some(format!("exit code was {actual}, expected {expected}"))
+    };
+    let context = if passed {
+        None
+    } else {
+        Some(serde_json::json!({"actual": actual, "expected": expected}))
+    };
+    (passed, message, context)
+}
+
 // =============================================================================
 // Field Extractors
 // =============================================================================
 
-fn get_text_field(assertion: &Assertion) -> &str {
+/// Result type alias for field extraction from assertions.
+type FieldResult<T> = Result<T, AssertionResult>;
+
+fn get_text_field(assertion: &Assertion) -> FieldResult<&str> {
     assertion
         .payload
         .get("text")
         .and_then(Value::as_str)
-        .unwrap_or("")
+        .ok_or_else(|| {
+            (
+                false,
+                Some(format!(
+                    "missing required 'text' field in {} payload",
+                    assertion.assertion_type
+                )),
+                Some(serde_json::json!({ "received_payload": assertion.payload })),
+            )
+        })
 }
 
-fn get_pattern_field(assertion: &Assertion) -> &str {
+fn get_pattern_field(assertion: &Assertion) -> FieldResult<&str> {
     assertion
         .payload
         .get("pattern")
         .and_then(Value::as_str)
-        .unwrap_or("")
+        .ok_or_else(|| {
+            (
+                false,
+                Some(format!(
+                    "missing required 'pattern' field in {} payload",
+                    assertion.assertion_type
+                )),
+                Some(serde_json::json!({ "received_payload": assertion.payload })),
+            )
+        })
 }
 
-fn get_line_field(assertion: &Assertion) -> u64 {
+fn get_line_field(assertion: &Assertion) -> FieldResult<u64> {
     assertion
         .payload
         .get("line")
         .and_then(Value::as_u64)
-        .unwrap_or(0)
+        .ok_or_else(|| {
+            (
+                false,
+                Some(format!(
+                    "missing required 'line' field in {} payload",
+                    assertion.assertion_type
+                )),
+                Some(serde_json::json!({ "received_payload": assertion.payload })),
+            )
+        })
 }
 
 /// Get a screen line with bounds checking.
@@ -345,14 +475,6 @@ fn validate_pattern_length(pattern: &str) -> Option<AssertionResult> {
     } else {
         None
     }
-}
-
-fn regex_error(err: regex::Error) -> AssertionResult {
-    (
-        false,
-        Some("invalid regex".to_string()),
-        Some(Value::String(err.to_string())),
-    )
 }
 
 fn u16_overflow_error(field: &str, value: u64) -> AssertionResult {

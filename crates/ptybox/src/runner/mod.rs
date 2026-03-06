@@ -1,3 +1,37 @@
+//! Scenario execution engine with policy enforcement and budget management.
+//!
+//! This module provides the core execution loop for running scenarios and
+//! single commands under a security policy. It handles policy validation,
+//! session spawning, step execution, assertion evaluation, wait conditions,
+//! resource budget enforcement, and artifact collection.
+//!
+//! # Key Types
+//!
+//! - [`RunnerError`] — Structured error type with stable error codes
+//! - [`RunnerResult<T>`] — Result alias for `Result<T, RunnerError>`
+//! - [`RunnerOptions`] — Configuration for artifacts output and progress callbacks
+//! - [`ErrorCode`] — Enumeration of stable error codes with exit code mappings
+//!
+//! # Key Functions
+//!
+//! - [`run_scenario`] — Execute a complete scenario (steps, assertions, artifacts)
+//! - [`run_exec_with_options`] — Run a single command under policy
+//! - [`compile_safe_regex`] — Compile a regex with `ReDoS` protection
+//!
+//! # Example
+//!
+//! ```no_run
+//! use ptybox::runner::{run_scenario, RunnerOptions, RunnerResult};
+//! use ptybox::scenario::load_scenario_file;
+//!
+//! # fn example() -> RunnerResult<()> {
+//! let scenario = load_scenario_file("test.json")?;
+//! let result = run_scenario(scenario, RunnerOptions::default())?;
+//! println!("Status: {:?}", result.status);
+//! # Ok(())
+//! # }
+//! ```
+
 pub mod progress;
 
 use crate::artifacts::{ArtifactsWriter, ArtifactsWriterConfig};
@@ -8,12 +42,16 @@ use crate::model::{
     NORMALIZATION_VERSION, PROTOCOL_VERSION,
 };
 use crate::policy::{
-    sandbox, validate_artifacts_dir, validate_artifacts_policy, validate_env_policy,
-    validate_fs_policy, validate_network_policy, validate_policy_version, validate_sandbox_mode,
-    validate_write_access, EffectivePolicy,
+    validate_artifacts_dir, validate_artifacts_policy, validate_env_policy, validate_fs_policy,
+    validate_network_policy, validate_policy_version, validate_sandbox_mode, validate_write_access,
+    EffectivePolicy,
 };
 use crate::scenario::load_policy_ref;
 use crate::session::{Session, SessionConfig};
+use crate::util::{
+    build_spawn_command, convert_exit_status, elapsed_ms, pause_until, resolve_artifacts_config,
+    snapshot_bytes, SandboxCleanupGuard,
+};
 use miette::Diagnostic;
 pub use progress::{NoopProgress, ProgressCallback, ProgressEvent};
 use serde::Deserialize;
@@ -23,10 +61,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Compile a regex pattern with length validation to prevent `ReDoS` attacks.
+/// Maximum compiled regex size (1 MB) to prevent catastrophic backtracking.
+const MAX_REGEX_SIZE: usize = 1_000_000;
+
+/// Compile a regex pattern with length and DFA size limits to prevent `ReDoS` attacks.
+///
+/// Both the source pattern length and the compiled automaton size are bounded.
 ///
 /// # Errors
-/// Returns `E_PROTOCOL` if pattern exceeds `MAX_REGEX_PATTERN_LEN` or is invalid.
+/// Returns `E_PROTOCOL` if pattern exceeds `MAX_REGEX_PATTERN_LEN`, the compiled
+/// automaton exceeds [`MAX_REGEX_SIZE`], or the pattern is invalid.
 pub fn compile_safe_regex(pattern: &str) -> Result<regex::Regex, RunnerError> {
     if pattern.len() > MAX_REGEX_PATTERN_LEN {
         return Err(RunnerError::protocol(
@@ -38,7 +82,9 @@ pub fn compile_safe_regex(pattern: &str) -> Result<regex::Regex, RunnerError> {
             })),
         ));
     }
-    regex::Regex::new(pattern)
+    regex::RegexBuilder::new(pattern)
+        .size_limit(MAX_REGEX_SIZE)
+        .build()
         .map_err(|err| RunnerError::protocol("E_PROTOCOL", format!("invalid regex: {err}"), None))
 }
 
@@ -201,6 +247,8 @@ impl RunnerError {
     }
 
     /// Create a policy denied error (legacy API, kept for compatibility).
+    // TODO: migrate callers to use ErrorCode directly
+    #[deprecated(note = "use RunnerError::with_context(ErrorCode::PolicyDenied, ...) instead")]
     pub fn policy_denied(
         _code: impl Into<String>,
         message: impl Into<String>,
@@ -215,6 +263,8 @@ impl RunnerError {
     }
 
     /// Create a timeout error (budget exceeded, legacy API).
+    // TODO: migrate callers to use ErrorCode directly
+    #[deprecated(note = "use RunnerError::with_context(ErrorCode::Timeout, ...) instead")]
     pub fn timeout(
         _code: impl Into<String>,
         message: impl Into<String>,
@@ -229,6 +279,8 @@ impl RunnerError {
     }
 
     /// Create a protocol error (invalid JSON or version mismatch, legacy API).
+    // TODO: migrate callers to use ErrorCode directly
+    #[deprecated(note = "use RunnerError::with_context(ErrorCode::Protocol, ...) instead")]
     pub fn protocol(
         _code: impl Into<String>,
         message: impl Into<String>,
@@ -243,6 +295,8 @@ impl RunnerError {
     }
 
     /// Create an I/O error (legacy API).
+    // TODO: migrate callers to use io_err() which preserves the error source chain
+    #[deprecated(note = "use RunnerError::io_err() to preserve error source chain")]
     pub fn io(
         _code: impl Into<String>,
         message: impl Into<String>,
@@ -272,6 +326,8 @@ impl RunnerError {
     }
 
     /// Create a terminal parse error (legacy API).
+    // TODO: migrate callers to use ErrorCode directly
+    #[deprecated(note = "use RunnerError::with_context(ErrorCode::TerminalParse, ...) instead")]
     pub fn terminal_parse(
         _code: impl Into<String>,
         message: impl Into<String>,
@@ -292,6 +348,8 @@ impl RunnerError {
     }
 
     /// Create an internal error (legacy API).
+    // TODO: migrate callers to use ErrorCode directly
+    #[deprecated(note = "use RunnerError::with_context(ErrorCode::Internal, ...) instead")]
     pub fn internal(_code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: ErrorCode::Internal,
@@ -302,6 +360,8 @@ impl RunnerError {
     }
 
     /// Create a process exit error (legacy API).
+    // TODO: migrate callers to use ErrorCode directly
+    #[deprecated(note = "use RunnerError::with_context(ErrorCode::ProcessExit, ...) instead")]
     pub fn process_exit(_code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: ErrorCode::ProcessExit,
@@ -395,10 +455,17 @@ impl Diagnostic for RunnerError {}
 
 /// Options for configuring scenario execution.
 #[derive(Clone, Default)]
+/// Configuration options for the runner execution engine.
+///
+/// Controls artifact output and optional progress reporting during execution.
+/// Use [`Default::default()`] for no artifacts and no progress callback.
 pub struct RunnerOptions {
-    /// Artifacts writer configuration.
+    /// Artifacts writer configuration. When [`Some`], snapshots, transcripts,
+    /// and run results are written to the specified directory.
     pub artifacts: Option<ArtifactsWriterConfig>,
-    /// Progress callback for receiving execution events.
+    /// Progress callback for receiving execution events (step started,
+    /// step completed, run finished). Used by the CLI for verbose output
+    /// and TUI mode visualization.
     pub progress: Option<Arc<dyn ProgressCallback>>,
 }
 
@@ -409,24 +476,6 @@ impl std::fmt::Debug for RunnerOptions {
             .field("progress", &self.progress.as_ref().map(|_| "..."))
             .finish()
     }
-}
-
-fn resolve_artifacts_config(
-    policy: &Policy,
-    options: Option<ArtifactsWriterConfig>,
-) -> Option<ArtifactsWriterConfig> {
-    if options.is_some() {
-        return options;
-    }
-    if policy.artifacts.enabled {
-        if let Some(dir) = policy.artifacts.dir.as_ref() {
-            return Some(ArtifactsWriterConfig {
-                dir: PathBuf::from(dir),
-                overwrite: policy.artifacts.overwrite,
-            });
-        }
-    }
-    None
 }
 
 /// Emit a progress event if a callback is configured.
@@ -482,10 +531,13 @@ fn execute_step(
     step_started_ms: u64,
     run_started: &Instant,
 ) -> RunnerResult<StepExecutionResult> {
+    debug_assert!(step.timeout_ms > 0, "step timeout must be positive");
+    debug_assert!(step.retries < 100, "step retries should be bounded");
+
     let mut attempts = 0;
     let mut last_error: Option<RunnerError> = None;
     let mut status = StepStatus::Failed;
-    let mut assertion_results = Vec::new();
+    let mut assertion_results = Vec::with_capacity(step.assert.len());
 
     for _ in 0..=step.retries {
         attempts += 1;
@@ -531,21 +583,9 @@ fn execute_step(
             writer.write_observation(&observation)?;
         }
 
-        // Evaluate assertions
-        assertion_results.clear();
-        let mut assertions_passed = true;
-        for assertion in &step.assert {
-            let (passed, message, details) = crate::assertions::evaluate(&observation, assertion);
-            if !passed {
-                assertions_passed = false;
-            }
-            assertion_results.push(AssertionResult {
-                assertion_type: assertion.assertion_type.clone(),
-                passed,
-                message,
-                details,
-            });
-        }
+        // Evaluate assertions (with exit status probing for exit_code assertions)
+        let assertions_passed =
+            evaluate_step_assertions(session, &observation, &step.assert, &mut assertion_results)?;
 
         if assertions_passed {
             status = StepStatus::Passed;
@@ -580,6 +620,43 @@ fn execute_step(
         },
         run_error,
     })
+}
+
+/// Evaluate step assertions, probing process exit status when needed.
+fn evaluate_step_assertions(
+    session: &mut Session,
+    observation: &crate::model::Observation,
+    assertions: &[crate::model::scenario::Assertion],
+    results: &mut Vec<AssertionResult>,
+) -> RunnerResult<bool> {
+    let has_exit_code_assertion = assertions.iter().any(|a| a.assertion_type == "exit_code");
+    let exit_status = if has_exit_code_assertion {
+        session
+            .wait_for_exit(Duration::from_millis(0))?
+            .map(|s| convert_exit_status(s, false))
+    } else {
+        None
+    };
+
+    results.clear();
+    let mut all_passed = true;
+    for assertion in assertions {
+        let (passed, message, details) = crate::assertions::evaluate_with_exit_status(
+            observation,
+            assertion,
+            exit_status.as_ref(),
+        );
+        if !passed {
+            all_passed = false;
+        }
+        results.push(AssertionResult {
+            assertion_type: assertion.assertion_type.clone(),
+            passed,
+            message,
+            details,
+        });
+    }
+    Ok(all_passed)
 }
 
 /// Check step budgets and return an error if exceeded.
@@ -644,21 +721,6 @@ fn await_scenario_exit(
     match session.wait_for_exit(remaining)? {
         Some(status) => Ok(Some(convert_exit_status(status, false))),
         None => Err(create_timeout_error(session, policy)),
-    }
-}
-
-/// Convert a `portable_pty` exit status to our `ExitStatus` type.
-fn convert_exit_status(
-    status: portable_pty::ExitStatus,
-    terminated_by_harness: bool,
-) -> ExitStatus {
-    #[allow(clippy::cast_possible_wrap)]
-    let code = status.exit_code() as i32;
-    ExitStatus {
-        success: status.success(),
-        exit_code: Some(code),
-        signal: None,
-        terminated_by_harness,
     }
 }
 
@@ -728,6 +790,26 @@ fn poll_exec_until_exit(
 /// # Errors
 /// Returns `RunnerError` for policy violations, timeouts, I/O failures, etc.
 /// The error code indicates the specific failure type.
+/// Execute a complete scenario: validate policy, spawn session, run steps, collect artifacts.
+///
+/// This is the primary entry point for scenario-based execution. The runner:
+/// 1. Validates the embedded policy (version, sandbox, network, filesystem, env)
+/// 2. Spawns a PTY session with sandbox wrapping (if applicable)
+/// 3. Executes each step in order: send action, evaluate assertions
+/// 4. Enforces resource budgets (runtime, steps, output, snapshots)
+/// 5. Writes artifacts to disk (if configured in options or policy)
+/// 6. Terminates the session and collects exit status
+///
+/// # Errors
+///
+/// Returns [`RunnerError`] with the following codes:
+/// - `E_POLICY_DENIED` — Policy validation failed
+/// - `E_SANDBOX_UNAVAILABLE` — Seatbelt not available on this platform
+/// - `E_TIMEOUT` — Runtime, step, or output budget exceeded
+/// - `E_ASSERTION_FAILED` — One or more assertions did not pass
+/// - `E_PROCESS_EXIT` — Child process exited unexpectedly during a step
+/// - `E_TERMINAL_PARSE` — Invalid UTF-8 in terminal output
+/// - `E_IO` — Artifact write or session I/O failure
 pub fn run_scenario(scenario: Scenario, options: RunnerOptions) -> RunnerResult<RunResult> {
     let run_id = RunId::new();
     let run_started = Instant::now();
@@ -931,7 +1013,7 @@ fn execute_scenario_steps(
     run_started: &Instant,
     progress: &Option<Arc<dyn ProgressCallback>>,
 ) -> RunnerResult<(Vec<StepResult>, Option<RunnerError>)> {
-    let mut step_results = Vec::new();
+    let mut step_results = Vec::with_capacity(scenario.steps.len());
     let mut run_error: Option<RunnerError> = None;
     let mut output_bytes: u64 = 0;
 
@@ -1109,6 +1191,18 @@ pub fn run_exec(
 ///
 /// Like [`run_exec`] but with additional configuration options for
 /// artifact collection and progress callbacks.
+/// Run a single command under a security policy with custom options.
+///
+/// Wraps the command in a minimal scenario with no steps or assertions.
+/// The runner validates the policy, spawns the process, captures the
+/// initial observation, and returns the run result with exit status.
+///
+/// This is the entry point for `ptybox exec` — useful for simple
+/// exec-and-capture workflows without step sequences.
+///
+/// # Errors
+///
+/// Returns [`RunnerError`] with the same codes as [`run_scenario`].
 pub fn run_exec_with_options(
     command: String,
     args: Vec<String>,
@@ -1493,8 +1587,10 @@ fn wait_for_condition(
             ));
         }
 
+        let screen_text = observation.screen.lines.join("\n");
         if condition_satisfied(
             &observation,
+            &screen_text,
             &wait_payload.condition,
             compiled_regex.as_ref(),
         )? {
@@ -1511,6 +1607,7 @@ fn action_type_label(action_type: &ActionType) -> &'static str {
         ActionType::Text => "text",
         ActionType::Resize => "resize",
         ActionType::Wait => "wait",
+        ActionType::Observe => "observe",
         ActionType::Terminate => "terminate",
     }
 }
@@ -1540,6 +1637,7 @@ fn with_step_timeout_context(err: RunnerError, step: &crate::model::Step) -> Run
 
 fn condition_satisfied(
     observation: &crate::model::Observation,
+    screen_text: &str,
     condition: &Condition,
     compiled_regex: Option<&regex::Regex>,
 ) -> RunnerResult<bool> {
@@ -1549,53 +1647,83 @@ fn condition_satisfied(
                 .payload
                 .get("text")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
-            Ok(observation.screen.lines.join("\n").contains(text))
+                .ok_or_else(|| {
+                    RunnerError::protocol(
+                        "E_PROTOCOL",
+                        "screen_contains condition requires 'text' field",
+                        Some(serde_json::json!({ "received_payload": condition.payload })),
+                    )
+                })?;
+            Ok(screen_text.contains(text))
         }
         "screen_matches" => {
-            // Use pre-compiled regex if available, otherwise compile (fallback)
-            let screen_text = observation.screen.lines.join("\n");
             if let Some(re) = compiled_regex {
-                Ok(re.is_match(&screen_text))
+                Ok(re.is_match(screen_text))
             } else {
                 let pattern = condition
                     .payload
                     .get("pattern")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                    .ok_or_else(|| {
+                        RunnerError::protocol(
+                            "E_PROTOCOL",
+                            "screen_matches condition requires 'pattern' field",
+                            Some(serde_json::json!({ "received_payload": condition.payload })),
+                        )
+                    })?;
                 let re = compile_safe_regex(pattern)?;
-                Ok(re.is_match(&screen_text))
+                Ok(re.is_match(screen_text))
             }
         }
         "cursor_at" => {
-            // Terminal coordinates are always small, safe to truncate
-            #[allow(clippy::cast_possible_truncation)]
-            let row = condition
+            let row_u64 = condition
                 .payload
                 .get("row")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u16;
-            #[allow(clippy::cast_possible_truncation)]
-            let col = condition
+                .ok_or_else(|| {
+                    RunnerError::protocol(
+                        "E_PROTOCOL",
+                        "cursor_at condition requires 'row' field",
+                        Some(serde_json::json!({ "received_payload": condition.payload })),
+                    )
+                })?;
+            let col_u64 = condition
                 .payload
                 .get("col")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u16;
+                .ok_or_else(|| {
+                    RunnerError::protocol(
+                        "E_PROTOCOL",
+                        "cursor_at condition requires 'col' field",
+                        Some(serde_json::json!({ "received_payload": condition.payload })),
+                    )
+                })?;
+            let row = u16::try_from(row_u64).map_err(|_| {
+                RunnerError::protocol(
+                    "E_PROTOCOL",
+                    format!("row value {row_u64} exceeds maximum u16 value {}", u16::MAX),
+                    Some(serde_json::json!({ "received": row_u64, "max": u16::MAX })),
+                )
+            })?;
+            let col = u16::try_from(col_u64).map_err(|_| {
+                RunnerError::protocol(
+                    "E_PROTOCOL",
+                    format!("col value {col_u64} exceeds maximum u16 value {}", u16::MAX),
+                    Some(serde_json::json!({ "received": col_u64, "max": u16::MAX })),
+                )
+            })?;
             Ok(observation.screen.cursor.row == row && observation.screen.cursor.col == col)
         }
         "process_exited" => Ok(false),
         other => Err(RunnerError::protocol(
             "E_PROTOCOL",
             format!("unsupported wait condition '{other}'"),
-            None,
+            Some(serde_json::json!({
+                "received": other,
+                "supported_conditions": ["screen_contains", "screen_matches", "cursor_at", "process_exited"]
+            })),
         )),
     }
-}
-
-fn snapshot_bytes(snapshot: &crate::model::ScreenSnapshot) -> RunnerResult<u64> {
-    let data = serde_json::to_vec(snapshot)
-        .map_err(|err| RunnerError::io("E_PROTOCOL", "failed to encode snapshot", err))?;
-    Ok(data.len() as u64)
 }
 
 fn enforce_exec_budgets(
@@ -1642,90 +1770,4 @@ fn enforce_exec_budgets(
     }
 
     Ok(())
-}
-
-fn elapsed_ms(started_at: &Instant) -> u64 {
-    // Elapsed time in practice is always well under u64::MAX milliseconds
-    #[allow(clippy::cast_possible_truncation)]
-    let ms = started_at.elapsed().as_millis() as u64;
-    ms
-}
-
-fn pause_until(deadline: Instant, max_step: Duration) {
-    let now = Instant::now();
-    if now >= deadline {
-        return;
-    }
-    let remaining = deadline.saturating_duration_since(now);
-    if remaining <= Duration::from_micros(500) {
-        std::thread::yield_now();
-        return;
-    }
-    std::thread::sleep(remaining.min(max_step));
-}
-
-struct SpawnCommand {
-    command: String,
-    args: Vec<String>,
-    cleanup_path: Option<PathBuf>,
-}
-
-fn build_spawn_command(
-    policy: &Policy,
-    command: &str,
-    args: &[String],
-    artifacts_dir: Option<&PathBuf>,
-    run_id: RunId,
-) -> RunnerResult<SpawnCommand> {
-    match policy.sandbox {
-        crate::model::policy::SandboxMode::Seatbelt => {
-            let profile_path = if let Some(dir) = artifacts_dir {
-                dir.join("sandbox.sb")
-            } else {
-                std::env::temp_dir().join(format!("ptybox-{run_id}.sb"))
-            };
-            sandbox::write_profile(&profile_path, policy)?;
-            let mut sandbox_args = vec!["-f".to_string(), profile_path.display().to_string()];
-            sandbox_args.push(command.to_string());
-            sandbox_args.extend(args.iter().cloned());
-            let cleanup = if artifacts_dir.is_some() {
-                None
-            } else {
-                Some(profile_path)
-            };
-            Ok(SpawnCommand {
-                command: "/usr/bin/sandbox-exec".to_string(),
-                args: sandbox_args,
-                cleanup_path: cleanup,
-            })
-        }
-        crate::model::policy::SandboxMode::Disabled { .. } => Ok(SpawnCommand {
-            command: command.to_string(),
-            args: args.to_vec(),
-            cleanup_path: None,
-        }),
-    }
-}
-
-/// RAII guard for sandbox profile cleanup.
-///
-/// Ensures the sandbox profile file is deleted when the guard is dropped,
-/// even on panic. This prevents temporary files from accumulating.
-struct SandboxCleanupGuard {
-    path: Option<PathBuf>,
-}
-
-impl SandboxCleanupGuard {
-    /// Create a new cleanup guard for the given path.
-    fn new(path: Option<PathBuf>) -> Self {
-        Self { path }
-    }
-}
-
-impl Drop for SandboxCleanupGuard {
-    fn drop(&mut self) {
-        if let Some(path) = self.path.take() {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
 }

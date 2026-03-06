@@ -59,7 +59,10 @@ pub enum PolicyRef {
     /// Inline policy object.
     Inline(Box<Policy>),
     /// Path to policy file.
-    File { path: String },
+    File {
+        /// Filesystem path to the policy JSON file.
+        path: String,
+    },
 }
 
 /// Single scenario step with action and assertions.
@@ -102,6 +105,8 @@ pub enum ActionType {
     Resize,
     /// Wait for condition (payload: `{condition: {type: "screen_contains", payload: {...}}}`).
     Wait,
+    /// Observe current screen without side effects (no payload required).
+    Observe,
     /// Terminate process.
     Terminate,
 }
@@ -395,6 +400,24 @@ impl Assertion {
         Self {
             assertion_type: "cursor_hidden".to_string(),
             payload: serde_json::json!({}),
+        }
+    }
+
+    /// Assert that the process exited with the given exit code.
+    ///
+    /// This assertion checks the process exit status, not the terminal screen.
+    /// It is most useful on steps that follow a `terminate` action or where
+    /// the process is expected to have already exited.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let assertion = Assertion::exit_code(0);
+    /// ```
+    #[must_use]
+    pub fn exit_code(code: i32) -> Self {
+        Self {
+            assertion_type: "exit_code".to_string(),
+            payload: serde_json::json!({"code": code}),
         }
     }
 }
