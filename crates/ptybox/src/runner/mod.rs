@@ -70,7 +70,7 @@ const MAX_REGEX_SIZE: usize = 1_000_000;
 ///
 /// # Errors
 /// Returns `E_PROTOCOL` if pattern exceeds `MAX_REGEX_PATTERN_LEN`, the compiled
-/// automaton exceeds [`MAX_REGEX_SIZE`], or the pattern is invalid.
+/// automaton exceeds `MAX_REGEX_SIZE`, or the pattern is invalid.
 pub fn compile_safe_regex(pattern: &str) -> Result<regex::Regex, RunnerError> {
     if pattern.len() > MAX_REGEX_PATTERN_LEN {
         return Err(RunnerError::protocol(

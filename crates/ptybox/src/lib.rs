@@ -95,10 +95,10 @@ pub use crate::model::*;
 ///
 /// # Key Functions
 ///
-/// - [`run_scenario`] — Execute a scenario with default options
-/// - [`run_scenario_with_options`] — Execute with custom runner options
-/// - [`run_exec`] — Run a single command under policy with defaults
-/// - [`run_exec_with_options`] — Run a single command with custom options
+/// - [`run::run_scenario`] — Execute a scenario with default options
+/// - [`run::run_scenario_with_options`] — Execute with custom runner options
+/// - [`run::run_exec`] — Run a single command under policy with defaults
+/// - [`run::run_exec_with_options`] — Run a single command with custom options
 ///
 /// # Example
 ///

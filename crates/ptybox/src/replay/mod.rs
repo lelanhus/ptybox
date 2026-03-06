@@ -250,7 +250,7 @@ pub fn read_replay_report(artifacts_dir: &Path) -> RunnerResult<ReplayReport> {
 /// # Errors
 /// - `E_REPLAY_MISMATCH` if any comparison fails
 /// - `E_IO` if baseline artifacts are missing or unreadable
-/// - Any error from [`run_scenario`](crate::runner::run_scenario) during re-run
+/// - Any error from [`run_scenario`] during re-run
 pub fn replay_artifacts(artifacts_dir: &Path, options: ReplayOptions) -> RunnerResult<RunResult> {
     let policy = load_policy_from_artifacts(artifacts_dir)?;
     let policy_replay = policy.replay.clone();

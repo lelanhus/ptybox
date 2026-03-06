@@ -1,8 +1,8 @@
 //! Interactive NDJSON driver loop for agent-controlled TUI sessions.
 //!
 //! This module implements the protocol v2 driver, which reads
-//! [`DriverRequestV2`](crate::model::driver::DriverRequestV2) messages from
-//! stdin and writes [`DriverResponseV2`](crate::model::driver::DriverResponseV2)
+//! [`DriverRequestV2`] messages from
+//! stdin and writes [`DriverResponseV2`]
 //! responses to stdout. Each request sends one action and receives one
 //! observation with correlated `request_id`.
 //!

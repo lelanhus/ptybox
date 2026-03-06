@@ -1,6 +1,6 @@
 //! Typed UUID identifiers for run, session, step, and snapshot entities.
 //!
-//! Each ID type is a newtype around [`Uuid`] with [`Display`](std::fmt::Display),
+//! Each ID type is a newtype around [`Uuid`](uuid::Uuid) with [`Display`](std::fmt::Display),
 //! `Serialize`/`Deserialize` (transparent), and `new()` constructor.
 
 use serde::{Deserialize, Serialize};
