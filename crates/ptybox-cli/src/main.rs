@@ -3,17 +3,16 @@
 //! Command-line interface for running scenarios and commands under policy control.
 
 // CLI-specific lint allowances (CLI binary, not library)
-#![allow(missing_docs)]
-#![allow(clippy::print_stdout)] // CLI must print to stdout
-#![allow(clippy::print_stderr)] // CLI must print to stderr
-#![allow(clippy::exit)] // CLI uses exit codes
-#![allow(clippy::unreachable)] // Used for exhaustive enum matching
-#![allow(clippy::fn_params_excessive_bools)] // CLI flags are naturally bools
-#![allow(deprecated)] // Legacy RunnerError constructors during migration
+#![allow(clippy::print_stdout, clippy::print_stderr)] // CLI output
+#![allow(clippy::exit, clippy::unreachable)] // CLI control flow
+#![allow(clippy::fn_params_excessive_bools)] // Clap flags
+#![allow(missing_docs, deprecated)]
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 use miette::{IntoDiagnostic, Result};
+use serde::Serialize;
+
 use ptybox::artifacts::ArtifactsWriterConfig;
 use ptybox::model::policy::Policy;
 use ptybox::policy::explain_policy_for_run_config;
@@ -639,8 +638,7 @@ fn cmd_replay(
     if explain {
         let explanation = ptybox::replay::explain_replay(&artifacts, options)?;
         if json {
-            let payload = serde_json::to_string(&explanation).into_diagnostic()?;
-            println!("{payload}");
+            emit_json(&explanation)?;
         } else {
             eprintln!("replay normalization: {explanation:?}");
         }
@@ -654,8 +652,7 @@ fn cmd_replay(
 fn cmd_replay_report(json: bool, artifacts: PathBuf) -> Result<()> {
     let report = ptybox::replay::read_replay_report(&artifacts)?;
     if json {
-        let payload = serde_json::to_string(&report).into_diagnostic()?;
-        println!("{payload}");
+        emit_json(&report)?;
     } else {
         eprintln!("replay report: {}", report.dir);
     }
@@ -683,8 +680,7 @@ fn emit_result(json: bool, result: Result<ptybox::model::RunResult, RunnerError>
     match result {
         Ok(run_result) => {
             if json {
-                let payload = serde_json::to_string(&run_result).into_diagnostic()?;
-                println!("{payload}");
+                emit_json(&run_result)?;
             } else {
                 eprintln!("run completed: {:?}", run_result.status);
             }
@@ -702,8 +698,7 @@ fn emit_result(json: bool, result: Result<ptybox::model::RunResult, RunnerError>
         }
         Err(err) => {
             if json {
-                let payload = serde_json::to_string(&err.to_error_info()).into_diagnostic()?;
-                println!("{payload}");
+                emit_json(&err.to_error_info())?;
             } else {
                 eprintln!("error: {err}");
             }
@@ -810,8 +805,7 @@ fn apply_cli_policy_overrides(
 
 fn emit_explanation(json: bool, explanation: &ptybox::policy::PolicyExplanation) -> Result<()> {
     if json {
-        let payload = serde_json::to_string(explanation).into_diagnostic()?;
-        println!("{payload}");
+        emit_json(explanation)?;
     } else if explanation.allowed {
         println!("policy: allowed");
     } else {
@@ -825,6 +819,12 @@ fn emit_explanation(json: bool, explanation: &ptybox::policy::PolicyExplanation)
 
 fn exit_code_for_error_code(code: &str) -> i32 {
     ptybox::runner::ErrorCode::parse(code).map_or(1, |c| c.exit_code())
+}
+
+fn emit_json<T: Serialize>(value: &T) -> Result<()> {
+    let payload = serde_json::to_string(value).into_diagnostic()?;
+    println!("{payload}");
+    Ok(())
 }
 
 fn emit_cli_error(json: bool, message: &str) -> Result<()> {

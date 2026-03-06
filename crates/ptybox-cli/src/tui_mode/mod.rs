@@ -44,7 +44,7 @@ pub fn run_tui(scenario: Scenario, artifacts: Option<ArtifactsWriterConfig>) -> 
     let (tx, rx) = mpsc::channel::<TuiEvent>();
 
     // Create app state
-    let mut app = App::new(scenario.clone());
+    let mut app = App::new(&scenario);
 
     // Run scenario in background thread
     let progress_tx = tx.clone();
@@ -88,8 +88,6 @@ pub fn run_tui(scenario: Scenario, artifacts: Option<ArtifactsWriterConfig>) -> 
 /// Events sent from the runner to the TUI.
 enum TuiEvent {
     Progress(ProgressEvent),
-    #[allow(dead_code)] // Reserved for future snapshot streaming
-    Snapshot(ScreenSnapshot),
     RunFinished(Box<std::result::Result<RunResult, ptybox::runner::RunnerError>>),
 }
 
@@ -106,8 +104,6 @@ impl ProgressCallback for TuiProgressCallback {
 
 /// Application state for the TUI.
 struct App {
-    #[allow(dead_code)] // Reserved for future use (e.g., showing scenario metadata)
-    scenario: Scenario,
     steps: Vec<StepState>,
     current_step: usize,
     snapshot: Option<ScreenSnapshot>,
@@ -124,7 +120,7 @@ struct StepState {
 }
 
 impl App {
-    fn new(scenario: Scenario) -> Self {
+    fn new(scenario: &Scenario) -> Self {
         let steps = scenario
             .steps
             .iter()
@@ -140,7 +136,6 @@ impl App {
             .collect();
 
         Self {
-            scenario,
             steps,
             current_step: 0,
             snapshot: None,
@@ -179,9 +174,6 @@ impl App {
                 }
                 ProgressEvent::RunStarted { .. } => {}
             },
-            TuiEvent::Snapshot(snapshot) => {
-                self.snapshot = Some(snapshot);
-            }
             TuiEvent::RunFinished(result) => {
                 self.running = false;
                 match *result {
